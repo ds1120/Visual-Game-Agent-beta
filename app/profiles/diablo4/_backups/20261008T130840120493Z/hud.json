@@ -1,0 +1,239 @@
+{
+  "version": 1,
+  "hud_bbox": [
+    481.374,
+    334.795,
+    518.044,
+    352.339
+  ],
+  "regions": {
+    "health": {
+      "visible": true,
+      "bbox": [
+        481.374,
+        299.708,
+        518.044,
+        305.556
+      ],
+      "pixel_bbox": [
+        827,
+        410,
+        890,
+        418
+      ],
+      "pixel_resolution": [
+        1718,
+        1368
+      ],
+      "confidence": 0.95,
+      "shape": "bar",
+      "axis": "x",
+      "fill_from": "start",
+      "hsv_ranges": [
+        [
+          [
+            92,
+            40,
+            30
+          ],
+          [
+            127,
+            255,
+            255
+          ]
+        ]
+      ],
+      "inset_fraction": [
+        0.032,
+        0.25
+      ],
+      "allow_empty": true,
+      "tracked_stack": true
+    },
+    "sp": {
+      "visible": true,
+      "bbox": [
+        481.374,
+        305.556,
+        518.044,
+        311.404
+      ],
+      "pixel_bbox": [
+        827,
+        418,
+        890,
+        426
+      ],
+      "pixel_resolution": [
+        1718,
+        1368
+      ],
+      "confidence": 0.95,
+      "shape": "bar",
+      "axis": "x",
+      "fill_from": "start",
+      "hsv_ranges": [
+        [
+          [
+            145,
+            40,
+            30
+          ],
+          [
+            179,
+            255,
+            255
+          ]
+        ]
+      ],
+      "inset_fraction": [
+        0.032,
+        0.25
+      ],
+      "allow_empty": true,
+      "tracked_stack": true
+    },
+    "mp": {
+      "visible": true,
+      "bbox": [
+        481.374,
+        311.404,
+        518.044,
+        317.251
+      ],
+      "pixel_bbox": [
+        827,
+        426,
+        890,
+        434
+      ],
+      "pixel_resolution": [
+        1718,
+        1368
+      ],
+      "confidence": 0.95,
+      "shape": "bar",
+      "axis": "x",
+      "fill_from": "start",
+      "hsv_ranges": [
+        [
+          [
+            112,
+            40,
+            30
+          ],
+          [
+            160,
+            255,
+            255
+          ]
+        ]
+      ],
+      "inset_fraction": [
+        0.032,
+        0.25
+      ],
+      "allow_empty": true,
+      "tracked_stack": true
+    },
+    "buffs": {
+      "visible": true,
+      "bbox": [
+        389,
+        807,
+        568,
+        857
+      ],
+      "coordinate_space": "game_viewport",
+      "confidence": 0.95
+    }
+  },
+  "calibration": {
+    "resolution": [
+      1718,
+      1368
+    ],
+    "validated": true,
+    "source": "startup-qwen+opencv",
+    "window_geometry": {
+      "capture_resolution": [
+        1718,
+        1368
+      ],
+      "coordinate_space": "full captured image, bbox normalized 0..1000",
+      "window_rect": [
+        1,
+        31,
+        1719,
+        1399
+      ]
+    },
+    "colors": {
+      "health": {
+        "hsv_ranges": [
+          [
+            [
+              92,
+              40,
+              30
+            ],
+            [
+              127,
+              255,
+              255
+            ]
+          ]
+        ],
+        "sample_hsv": [
+          109,
+          138,
+          172
+        ]
+      },
+      "sp": {
+        "hsv_ranges": [
+          [
+            [
+              145,
+              40,
+              30
+            ],
+            [
+              179,
+              255,
+              255
+            ]
+          ]
+        ],
+        "sample_hsv": [
+          163,
+          217,
+          140
+        ]
+      },
+      "mp": {
+        "hsv_ranges": [
+          [
+            [
+              112,
+              40,
+              30
+            ],
+            [
+              160,
+              255,
+              255
+            ]
+          ]
+        ],
+        "sample_hsv": [
+          128,
+          169,
+          135
+        ]
+      }
+    }
+  },
+  "layout": "bars_hp_sp_mp",
+  "bar_locator_version": 1
+}

@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "policy": {
+    "style": "balanced",
+    "target_priority": [
+      "boss",
+      "elite",
+      "normal"
+    ],
+    "pickup_enabled": false,
+    "potion_hp_threshold": 30.0,
+    "retreat_hp_threshold": 20.0
+  },
+  "methods": [
+    {
+      "id": "method_1",
+      "name": "collect",
+      "rules": {
+        "target": "confirmed item",
+        "pickup_enabled": true,
+        "notes": "Collect items from confirmed items in the area"
+      },
+      "priority": 1
+    },
+    {
+      "id": "method_2",
+      "name": "collect",
+      "rules": {
+        "target": "confirmed item",
+        "pickup_enabled": true,
+        "notes": "Collect items from confirmed items in the area"
+      },
+      "priority": 2
+    }
+  ]
+}

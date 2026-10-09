@@ -1,0 +1,142 @@
+from __future__ import annotations
+
+import asyncio
+import configparser
+import argparse
+
+from app.ai.visual_agent import VisualAgent
+from app.capture.screen_capture import ScreenCapture
+from app.controller.input_controller_factory import create_input_controller
+from app.core.action_executor import ActionExecutor
+from app.core.action_scheduler import ActionScheduler
+from app.core.logger import setup_logging
+from app.vision.qwen_vl_client import QwenVLClient
+from app.profiles.registry import create_game_profile
+from app.profiles.profile_store import PROJECT_ROOT, ProfileStore
+from app.profiles.runtime_settings import ensure_runtime_settings
+
+
+async def main() -> None:
+    parser = argparse.ArgumentParser(description="대화형 Visual Game Agent")
+    parser.add_argument("--no-chat", action="store_true", help="대화 콘솔 없이 실행")
+    parser.add_argument(
+        "--web",
+        action="store_true",
+        help="비공개 웹 연결 서버 실행 (처음에는 일시정지)",
+    )
+    parser.add_argument("--web-port", type=int, default=8765)
+    args = parser.parse_args()
+    cfg = configparser.ConfigParser()
+    if not cfg.read(PROJECT_ROOT / "config.ini", encoding="utf-8"):
+        raise FileNotFoundError("config.ini")
+
+    setup_logging(cfg.get("LOG", "level", fallback="INFO"))
+
+    game_profile = cfg.get("GAME", "profile", fallback="").strip().lower()
+    profile = create_game_profile(game_profile)
+    ensure_runtime_settings(profile.profile_dir)
+    profile_docs, _ = ProfileStore(profile.profile_dir).snapshot()
+    default_window_titles = {"diablo4": ["Diablo IV", "Diablo 4", "디아블로 IV"]}
+    configured_titles = [
+        x.strip()
+        for x in cfg.get("CAPTURE", "window_titles", fallback="").split(",")
+        if x.strip()
+    ]
+    window_titles = (
+        profile_docs["vision.json"]["window_titles"]
+        or configured_titles
+        or default_window_titles.get(profile.name, [])
+    )
+
+    capture = ScreenCapture(
+        output_idx=cfg.getint("CAPTURE", "output_idx", fallback=0),
+        mode=cfg.get("CAPTURE", "mode", fallback="window"),
+        window_titles=window_titles,
+        fallback_to_screen=cfg.getboolean(
+            "CAPTURE", "fallback_to_screen", fallback=False
+        ),
+    )
+
+    vl = QwenVLClient(
+        endpoint=cfg.get("QWEN_VL", "endpoint"),
+        model=cfg.get("QWEN_VL", "model", fallback="Qwen3-VL-2B-Instruct"),
+        timeout=cfg.getfloat("QWEN_VL", "timeout", fallback=15.0),
+        max_tokens=cfg.getint("QWEN_VL", "max_tokens", fallback=320),
+        image_width=cfg.getint("QWEN_VL", "image_width", fallback=1280),
+        jpeg_quality=cfg.getint("QWEN_VL", "jpeg_quality", fallback=80),
+    )
+
+    chat_vl = QwenVLClient(
+        endpoint=cfg.get("QWEN_VL", "endpoint"),
+        model=cfg.get("QWEN_VL", "model"),
+        timeout=cfg.getfloat("PROFILE_CHAT", "timeout", fallback=60),
+        max_tokens=cfg.getint("PROFILE_CHAT", "max_tokens", fallback=2048),
+        image_width=cfg.getint("QWEN_VL", "image_width", fallback=960),
+    )
+
+    controller = create_input_controller(
+        cfg.get("INPUT", "backend", fallback="mock"),
+        capture=capture,
+        settings_provider=lambda: agent._docs["input.json"],
+    )
+    executor = ActionExecutor(controller)
+    scheduler = ActionScheduler(executor)
+
+    agent = VisualAgent(
+        capture=capture,
+        vl=vl,
+        scheduler=scheduler,
+        interval=cfg.getfloat("QWEN_VL", "interval", fallback=1.0),
+        min_intent_confidence=cfg.getfloat(
+            "AGENT",
+            "min_intent_confidence",
+            fallback=0.60,
+        ),
+        hud_retry_interval=cfg.getfloat("AGENT", "hud_retry_interval", fallback=5.0),
+        summary_interval=cfg.getfloat("LOG", "summary_interval", fallback=2.0),
+        profile=profile,
+        chat_vl=chat_vl,
+        console_enabled=cfg.getboolean("AGENT", "console_enabled", fallback=True)
+        and not args.no_chat,
+        reaction_interval=cfg.getfloat("AGENT", "reaction_interval", fallback=0.05),
+        capture_fps=profile_docs["vision.json"].get(
+            "capture_fps", cfg.getfloat("AGENT", "capture_fps", fallback=60.0)
+        ),
+        hud_interval=cfg.getfloat("AGENT", "hud_interval", fallback=0.05),
+        intent_interval=cfg.getfloat("AGENT", "intent_interval", fallback=1.0),
+        intent_cache_ttl=cfg.getfloat("AGENT", "intent_cache_ttl", fallback=3.0),
+        yolo_config={
+            **profile_docs["vision.json"]["yolo"],
+            "model_path": str(
+                PROJECT_ROOT / profile_docs["vision.json"]["yolo"]["model_path"]
+            ),
+        },
+    )
+
+    bridge = None
+    if args.web:
+        from app.web.bridge import AgentBridge
+
+        agent._paused = True
+        bridge = AgentBridge(agent, port=args.web_port)
+    await scheduler.start()
+    try:
+        if bridge:
+            await bridge.start()
+        await agent.run()
+    except KeyboardInterrupt:
+        print("\n[Main] KeyboardInterrupt")
+    finally:
+        agent.stop()
+        if bridge:
+            await bridge.close()
+        await scheduler.stop()
+        await executor.close()
+        vl.close()
+        chat_vl.close()
+        capture.close()
+        print("[Main] stopped")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

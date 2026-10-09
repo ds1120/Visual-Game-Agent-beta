@@ -1,0 +1,238 @@
+{
+  "version": 1,
+  "hud_bbox": [
+    481.374,
+    334.795,
+    518.044,
+    352.339
+  ],
+  "regions": {
+    "health": {
+      "visible": true,
+      "bbox": [
+        481.374,
+        301.17,
+        518.044,
+        307.018
+      ],
+      "pixel_bbox": [
+        827,
+        412,
+        890,
+        420
+      ],
+      "pixel_resolution": [
+        1718,
+        1368
+      ],
+      "confidence": 0.95,
+      "shape": "bar",
+      "axis": "x",
+      "fill_from": "start",
+      "hsv_ranges": [
+        [
+          [
+            92,
+            40,
+            30
+          ],
+          [
+            127,
+            255,
+            255
+          ]
+        ]
+      ],
+      "inset_fraction": [
+        0.032,
+        0.25
+      ],
+      "allow_empty": true,
+      "tracked_stack": true
+    },
+    "sp": {
+      "visible": true,
+      "bbox": [
+        481.374,
+        307.018,
+        518.044,
+        312.865
+      ],
+      "pixel_bbox": [
+        827,
+        420,
+        890,
+        428
+      ],
+      "pixel_resolution": [
+        1718,
+        1368
+      ],
+      "confidence": 0.95,
+      "shape": "bar",
+      "axis": "x",
+      "fill_from": "start",
+      "hsv_ranges": [
+        [
+          [
+            145,
+            40,
+            30
+          ],
+          [
+            179,
+            255,
+            255
+          ]
+        ]
+      ],
+      "inset_fraction": [
+        0.032,
+        0.25
+      ],
+      "allow_empty": true,
+      "tracked_stack": true
+    },
+    "mp": {
+      "visible": true,
+      "bbox": [
+        481.374,
+        312.865,
+        518.044,
+        318.713
+      ],
+      "pixel_bbox": [
+        827,
+        428,
+        890,
+        436
+      ],
+      "pixel_resolution": [
+        1718,
+        1368
+      ],
+      "confidence": 0.95,
+      "shape": "bar",
+      "axis": "x",
+      "fill_from": "start",
+      "hsv_ranges": [
+        [
+          [
+            112,
+            40,
+            30
+          ],
+          [
+            160,
+            255,
+            255
+          ]
+        ]
+      ],
+      "inset_fraction": [
+        0.032,
+        0.25
+      ],
+      "allow_empty": true,
+      "tracked_stack": true
+    },
+    "buffs": {
+      "visible": true,
+      "bbox": [
+        0,
+        0,
+        1000,
+        1000
+      ],
+      "confidence": 0.95
+    }
+  },
+  "calibration": {
+    "resolution": [
+      1718,
+      1368
+    ],
+    "validated": true,
+    "source": "startup-qwen+opencv",
+    "window_geometry": {
+      "capture_resolution": [
+        1718,
+        1368
+      ],
+      "coordinate_space": "full captured image, bbox normalized 0..1000",
+      "window_rect": [
+        1,
+        31,
+        1719,
+        1399
+      ]
+    },
+    "colors": {
+      "health": {
+        "hsv_ranges": [
+          [
+            [
+              92,
+              40,
+              30
+            ],
+            [
+              127,
+              255,
+              255
+            ]
+          ]
+        ],
+        "sample_hsv": [
+          109,
+          138,
+          172
+        ]
+      },
+      "sp": {
+        "hsv_ranges": [
+          [
+            [
+              145,
+              40,
+              30
+            ],
+            [
+              179,
+              255,
+              255
+            ]
+          ]
+        ],
+        "sample_hsv": [
+          163,
+          217,
+          140
+        ]
+      },
+      "mp": {
+        "hsv_ranges": [
+          [
+            [
+              112,
+              40,
+              30
+            ],
+            [
+              160,
+              255,
+              255
+            ]
+          ]
+        ],
+        "sample_hsv": [
+          128,
+          169,
+          135
+        ]
+      }
+    }
+  },
+  "layout": "bars_hp_sp_mp",
+  "bar_locator_version": 1
+}

@@ -1,0 +1,11 @@
+"use client";
+import { useEffect, useState } from "react";
+export type BuffState={configured:boolean;bbox:number[]|null;fresh:boolean;active:string[];known_templates:string[];source:string};
+export default function BuffPanel({buffs,profile,session,online}:{buffs?:BuffState;profile:string;session:{url:string;token:string}|null;online:boolean}){
+ const [image,setImage]=useState<string|null>(null),[error,setError]=useState("");
+ const enabled=!!(online&&buffs?.fresh&&buffs.configured);
+ useEffect(()=>{let active=true,url:string|null=null,timer:ReturnType<typeof setTimeout>;const abort=new AbortController();setImage(null);setError("");
+ async function poll(){if(!session||!enabled)return;try{const response=await fetch(session.url+"/v1/buffs/frame",{headers:{Authorization:`Bearer ${session.token}`},cache:"no-store",credentials:"omit",signal:AbortSignal.any([abort.signal,AbortSignal.timeout(4000)])});if(!active)return;if(response.status===204){setImage(null);if(url)URL.revokeObjectURL(url);url=null;}else{if(!response.ok)throw new Error("버프 화면을 가져오지 못했습니다.");const blob=await response.blob();if(!active)return;const next=URL.createObjectURL(blob);setImage(next);if(url)URL.revokeObjectURL(url);url=next;setError("");}}catch(e){if(active){setImage(null);setError(e instanceof Error?e.message:"버프 화면 연결 오류");}}if(active)timer=setTimeout(()=>void poll(),500);}
+ void poll();return()=>{active=false;abort.abort();clearTimeout(timer);if(url)URL.revokeObjectURL(url);};},[session?.url,session?.token,enabled]);
+ return <section className="buff-panel" aria-label="현재 활성 버프"><div className="input-monitor-heading"><h3>{profile} · 현재 버프창</h3><span>{enabled?"실시간 · OpenCV":"확인 대기"}</span></div><div className="buff-preview">{enabled&&image?<img src={image} alt="게임 화면에서 캡처한 현재 버프 아이콘 영역"/>:<p>{!buffs?.configured?"게임별 설정에서 버프창 영역을 지정하세요.":enabled?"버프창 화면을 불러오는 중…":"HP 확인 후 버프창을 표시합니다."}</p>}</div><div className="buff-badges">{enabled&&buffs?.active.length?buffs.active.map(name=><span key={name}>{name}</span>):<span className="buff-empty">{enabled?buffs?.known_templates.length?"등록 템플릿과 일치한 버프 없음":"버프 이름 템플릿 미등록":"현재 버프 상태 미확인"}</span>}</div><p className="live-help">실제 화면에 표시된 버프를 보여줍니다. 버프 키 전송을 활성 버프로 간주하지 않습니다. 등록 아이콘 {buffs?.known_templates.length??0}개 · 영역 캡처 초당 최대 2회</p>{error&&<p className="live-error">{error}</p>}</section>;
+}

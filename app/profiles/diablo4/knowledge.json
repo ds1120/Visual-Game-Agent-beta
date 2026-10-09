@@ -1,0 +1,154 @@
+{
+  "game": "Diablo IV",
+  "policy": {
+    "single_red_enemy_health_bar_confirms_monster": true,
+    "red_bar_rule": "A single red HP bar clearly attached to this body confirms a hostile monster in this game. Do not confuse player HUD, multiple stacked bars, or a neighboring object's bar with this evidence.",
+    "detector_labels_are_hints": true,
+    "prefer_unknown_when_uncertain": true,
+    "do_not_invent_objects": true,
+    "classify_only_requested_objects": true
+  },
+  "semantics": {
+    "monster": {
+      "description": "A hostile combat creature or enemy character that can be attacked.",
+      "default_relation": "hostile",
+      "positive_clues": [
+        "hostile health bar or enemy combat UI",
+        "attacks, chases, surrounds, or threatens the player",
+        "combat creature silhouette or enemy pack behavior"
+      ],
+      "negative_clues": [
+        "stationary town character with dialog or interaction marker",
+        "ground loot label or loot beam",
+        "static environment geometry"
+      ]
+    },
+    "npc": {
+      "description": "A non-hostile character intended for dialog, service, quest, or interaction.",
+      "default_relation": "neutral",
+      "positive_clues": [
+        "dialog, quest, vendor, or interaction indicator",
+        "non-combat behavior near towns or safe areas",
+        "no convincing hostile combat evidence"
+      ]
+    },
+    "player": {
+      "description": "The controlled player character or another player/ally character.",
+      "default_relation": "friendly",
+      "positive_clues": [
+        "character associated with player HUD or party/ally presentation",
+        "persistent controlled character near the gameplay focus"
+      ]
+    },
+    "item": {
+      "description": "Loot or another collectible object, usually on the ground.",
+      "default_relation": "neutral",
+      "positive_clues": [
+        "ground item name or loot label",
+        "loot beam, glow, rarity presentation, or pickup presentation",
+        "not shaped or behaving like an active character"
+      ]
+    },
+    "obstacle": {
+      "description": "Static environment geometry or an object that blocks or constrains movement.",
+      "default_relation": "neutral",
+      "positive_clues": [
+        "wall, pillar, barricade, rock, terrain object, or static prop",
+        "does not behave like a character or collectible"
+      ]
+    },
+    "unknown": {
+      "description": "Use when the visual evidence is insufficient or conflicting.",
+      "default_relation": "unknown"
+    }
+  },
+  "relation_rules": {
+    "hostile": "Use only with concrete enemy or attack/combat evidence.",
+    "friendly": "Use for the player, allies, or clearly friendly characters.",
+    "neutral": "Use for NPCs, items, obstacles, and non-hostile entities unless stronger evidence exists.",
+    "unknown": "Use when relation cannot be established visually."
+  },
+  "intent_rules": {
+    "ENGAGE": {
+      "meaning": "Start or continue combat.",
+      "required_evidence": [
+        "at least one object classified hostile with sufficient confidence"
+      ],
+      "forbidden_when": [
+        "no hostile object evidence exists"
+      ],
+      "fallback": "EXPLORE"
+    },
+    "INTERACT": {
+      "meaning": "Interact with an NPC, item, or explicit interaction target/UI.",
+      "required_evidence": [
+        "a visible NPC/item/interactable object, or a clear interaction/pickup/dialog UI prompt"
+      ],
+      "forbidden_when": [
+        "no interactable object or interaction UI evidence exists"
+      ],
+      "fallback": "EXPLORE"
+    },
+    "USE_RESOURCE": {
+      "meaning": "Use a potion or other limited resource because current state requires it.",
+      "required_evidence": [
+        "HUD/state indicates a configured resource-use condition"
+      ],
+      "forbidden_when": [
+        "there is no resource need supported by HUD/state"
+      ],
+      "fallback": "WAIT"
+    },
+    "RETREAT": {
+      "meaning": "Disengage from danger.",
+      "required_evidence": [
+        "hostile/danger evidence plus a reason to disengage such as low HP"
+      ],
+      "forbidden_when": [
+        "there is no danger evidence"
+      ],
+      "fallback": "EXPLORE"
+    },
+    "MOVE": {
+      "meaning": "Move toward a concrete navigation or tactical target.",
+      "required_evidence": [
+        "a concrete destination, target, or navigation reason"
+      ],
+      "fallback": "EXPLORE"
+    },
+    "EXPLORE": {
+      "meaning": "No immediate combat/interaction requirement; continue searching the scene.",
+      "required_evidence": [
+        "default safe choice when no stronger grounded intent is supported"
+      ]
+    },
+    "WAIT": {
+      "meaning": "Do nothing temporarily when acting would be unsupported or unsafe.",
+      "required_evidence": [
+        "uncertain scene or no safe useful action"
+      ]
+    }
+  },
+  "intent_policy": {
+    "evidence_first": true,
+    "never_infer_interact_from_scene_style_alone": true,
+    "never_infer_combat_without_hostile_evidence": true,
+    "prefer_explore_or_wait_when_evidence_is_missing": true,
+    "confidence_must_reflect_visual_evidence": true
+  },
+  "semantic_rules": [],
+  "named_entities": [
+    {
+      "names": [
+        "라헤어",
+        "아시아라",
+        "Raheir",
+        "아이아라",
+        "Ayara"
+      ],
+      "semantic": "npc",
+      "relation": "friendly",
+      "rule": "Only when identity is visually clear; do not infer from shape alone."
+    }
+  ]
+}

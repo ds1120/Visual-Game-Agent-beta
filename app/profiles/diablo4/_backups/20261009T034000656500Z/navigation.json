@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "step_ms": 280,
+  "step_fraction": 0.4,
+  "obstacle_margin": 0.025,
+  "minimap": {
+    "enabled": true,
+    "bbox": [
+      818,
+      46,
+      989,
+      237
+    ],
+    "player": [
+      0.5,
+      0.5
+    ],
+    "rotation_degrees": 0,
+    "walkable_hsv": [
+      [
+        [
+          0,
+          0,
+          138
+        ],
+        [
+          35,
+          135,
+          255
+        ]
+      ]
+    ],
+    "stuck_seconds": 2,
+    "dark_floor": 138,
+    "mapping": {
+      "enabled": true,
+      "mode": "diablo4_auto",
+      "center_weight": 4,
+      "preferred_clearance_px": 10,
+      "wall_margin_px": 1,
+      "calibrated": true,
+      "screen_pixels_per_map_pixel": 12,
+      "crop_to_viewport": true,
+      "control_mode": "feedback_steps"
+    }
+  },
+  "steering": {
+    "projection": "isotropic",
+    "move_interval_ms": 120,
+    "require_minimap": true,
+    "player_screen": [
+      0.5,
+      0.5
+    ],
+    "infer_player_from_hud": true
+  }
+}

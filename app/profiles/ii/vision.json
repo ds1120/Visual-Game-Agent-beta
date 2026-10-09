@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "capture_fps": 60,
+  "learning_interval": 1,
+  "motion_gating": false,
+  "semantic_gating": true,
+  "class_rules": {},
+  "window_titles": [
+    "디아2"
+  ],
+  "yolo": {
+    "enabled": false,
+    "model_path": "yolo/models/best.onnx",
+    "confidence": 0.4,
+    "device": "0",
+    "image_size": 320,
+    "interval": 0.35,
+    "max_detections": 10,
+    "roi_x": 0.05,
+    "roi_y": 0.05,
+    "roi_width": 0.9,
+    "roi_height": 0.85
+  }
+}

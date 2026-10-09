@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "require_foreground": true,
+  "tap_ms": 40,
+  "attack_skills": [],
+  "attack_max_seconds": 60,
+  "attack_recheck_seconds": 8,
+  "pointer_smoothing": true,
+  "pointer_duration_ms": 120,
+  "bindings": {
+    "ATTACK": "mouse_left",
+    "TAKE": "E",
+    "USE_POTION": "1",
+    "DODGE": "SPACE",
+    "INTERACT": "E",
+    "CAST_BUFF": "1",
+    "USE_SKILL": "2",
+    "MOVE": "mouse_left"
+  },
+  "movement": {
+    "mode": "click",
+    "up": "W",
+    "down": "S",
+    "left": "A",
+    "right": "D"
+  },
+  "attack_lost_grace_ms": 2000,
+  "combat": {
+    "stance": "stationary",
+    "dodge_mode": "move",
+    "minimum_distance": 0.18,
+    "attack_distance": 0.16,
+    "ranged_attack_distance": 0.45
+  },
+  "basic_attack_mode": "tap",
+  "disabled_actions": [
+    "USE_SKILL",
+    "CAST_BUFF"
+  ],
+  "gameplay_preset_version": 1
+}

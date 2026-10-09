@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "hud_bbox": null,
+  "regions": {},
+  "calibration": {
+    "resolution": [],
+    "validated": false,
+    "source": "unset"
+  }
+}

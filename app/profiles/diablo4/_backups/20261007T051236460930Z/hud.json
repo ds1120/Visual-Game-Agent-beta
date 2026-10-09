@@ -1,0 +1,160 @@
+{
+  "version": 1,
+  "hud_bbox": [
+    481.374,
+    334.795,
+    518.044,
+    352.339
+  ],
+  "regions": {
+    "health": {
+      "visible": true,
+      "bbox": [
+        381.257,
+        272.661,
+        402.794,
+        276.316
+      ],
+      "pixel_bbox": [
+        655,
+        373,
+        692,
+        378
+      ],
+      "pixel_resolution": [
+        1718,
+        1368
+      ],
+      "confidence": 0.8812187910079956,
+      "shape": "bar",
+      "axis": "x",
+      "fill_from": "start",
+      "hsv_ranges": [
+        [
+          [
+            92,
+            40,
+            30
+          ],
+          [
+            127,
+            255,
+            255
+          ]
+        ]
+      ],
+      "inset_fraction": [
+        0.032,
+        0.25
+      ],
+      "allow_empty": true,
+      "tracked_stack": true
+    },
+    "sp": {
+      "visible": true,
+      "bbox": [
+        381.257,
+        276.316,
+        402.794,
+        279.24
+      ],
+      "pixel_bbox": [
+        655,
+        378,
+        692,
+        382
+      ],
+      "pixel_resolution": [
+        1718,
+        1368
+      ],
+      "confidence": 0.8812187910079956,
+      "shape": "bar",
+      "axis": "x",
+      "fill_from": "start",
+      "hsv_ranges": [
+        [
+          [
+            145,
+            40,
+            30
+          ],
+          [
+            179,
+            255,
+            255
+          ]
+        ]
+      ],
+      "inset_fraction": [
+        0.032,
+        0.25
+      ],
+      "allow_empty": true,
+      "tracked_stack": true
+    },
+    "mp": {
+      "visible": true,
+      "bbox": [
+        381.257,
+        279.24,
+        402.794,
+        282.895
+      ],
+      "pixel_bbox": [
+        655,
+        382,
+        692,
+        387
+      ],
+      "pixel_resolution": [
+        1718,
+        1368
+      ],
+      "confidence": 0.8812187910079956,
+      "shape": "bar",
+      "axis": "x",
+      "fill_from": "start",
+      "hsv_ranges": [
+        [
+          [
+            112,
+            40,
+            30
+          ],
+          [
+            160,
+            255,
+            255
+          ]
+        ]
+      ],
+      "inset_fraction": [
+        0.032,
+        0.25
+      ],
+      "allow_empty": true,
+      "tracked_stack": true
+    },
+    "buffs": {
+      "visible": true,
+      "bbox": [
+        0,
+        0,
+        1000,
+        1000
+      ],
+      "confidence": 0.95
+    }
+  },
+  "calibration": {
+    "resolution": [
+      1718,
+      1368
+    ],
+    "validated": true,
+    "source": "qwen-recheck+opencv"
+  },
+  "layout": "bars_hp_sp_mp",
+  "bar_locator_version": 1
+}

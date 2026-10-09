@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "step_ms": 180,
+  "step_fraction": 0.3,
+  "obstacle_margin": 0.025,
+  "minimap": {
+    "enabled": true,
+    "bbox": [
+      820,
+      140,
+      988,
+      295
+    ],
+    "player": [
+      0.5,
+      0.5
+    ],
+    "rotation_degrees": 0,
+    "walkable_hsv": [
+      [
+        [
+          0,
+          0,
+          138
+        ],
+        [
+          35,
+          135,
+          255
+        ]
+      ]
+    ],
+    "stuck_seconds": 2,
+    "dark_floor": 138,
+    "mapping": {
+      "enabled": true,
+      "mode": "bright_floor",
+      "center_weight": 4,
+      "preferred_clearance_px": 10,
+      "wall_margin_px": 2,
+      "calibrated": true,
+      "screen_pixels_per_map_pixel": 12,
+      "crop_to_viewport": false
+    }
+  },
+  "steering": {
+    "projection": "isotropic",
+    "move_interval_ms": 500,
+    "require_minimap": true,
+    "player_screen": [
+      0.5,
+      0.5
+    ],
+    "infer_player_from_hud": true
+  }
+}

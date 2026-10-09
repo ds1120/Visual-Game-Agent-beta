@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "basic_attack_mode": "tap",
+  "attack_verify_hostility": true,
+  "attack_require_health_feedback": true,
+  "require_foreground": true,
+  "tap_ms": 20,
+  "bindings": {
+    "ATTACK": "mouse_right",
+    "TAKE": "mouse_left",
+    "USE_POTION": "Q",
+    "DODGE": "SPACE",
+    "INTERACT": "F",
+    "CAST_BUFF": "4",
+    "USE_SKILL": "mouse_left",
+    "MOVE": "mouse_left"
+  },
+  "movement": {
+    "mode": "click",
+    "up": "W",
+    "down": "S",
+    "left": "A",
+    "right": "D"
+  },
+  "attack_skills": [
+    {
+      "id": "skill_1791289709260_1",
+      "name": "공격 스킬 1",
+      "key": "1",
+      "enabled": false,
+      "cooldown_ms": 1300
+    },
+    {
+      "id": "skill_1791289709260_2",
+      "name": "공격 버프",
+      "key": "2",
+      "enabled": true,
+      "cooldown_ms": 10200
+    },
+    {
+      "id": "skill_1791289709260_3",
+      "name": "공격 스킬 3",
+      "key": "3",
+      "enabled": false,
+      "cooldown_ms": 1000
+    },
+    {
+      "id": "skill_1791289856015_4",
+      "name": "공격 스킬 4",
+      "key": "4",
+      "enabled": false,
+      "cooldown_ms": 1000
+    }
+  ],
+  "pointer_smoothing": true,
+  "pointer_duration_ms": 60,
+  "attack_max_seconds": 30,
+  "attack_recheck_seconds": 8,
+  "attack_lost_grace_ms": 2000,
+  "combat": {
+    "stance": "stationary",
+    "dodge_mode": "key",
+    "minimum_distance": 0.18,
+    "attack_distance": 0.16,
+    "ranged_attack_distance": 0.45
+  },
+  "disabled_actions": []
+}

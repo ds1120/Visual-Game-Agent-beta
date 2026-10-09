@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "require_foreground": true,
+  "tap_ms": 40,
+  "bindings": {
+    "ATTACK": "mouse_left",
+    "TAKE": "E",
+    "USE_POTION": "Q",
+    "DODGE": "SPACE",
+    "INTERACT": "E",
+    "CAST_BUFF": "1",
+    "USE_SKILL": "2",
+    "MOVE": "mouse_left"
+  },
+  "movement": {
+    "mode": "keys",
+    "up": "W",
+    "down": "S",
+    "left": "A",
+    "right": "D"
+  }
+}

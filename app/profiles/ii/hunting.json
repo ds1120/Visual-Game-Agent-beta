@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "policy": {
+    "style": "balanced",
+    "target_priority": [
+      "boss",
+      "elite",
+      "normal"
+    ],
+    "pickup_enabled": false,
+    "potion_hp_threshold": 30,
+    "retreat_hp_threshold": 20
+  },
+  "methods": []
+}

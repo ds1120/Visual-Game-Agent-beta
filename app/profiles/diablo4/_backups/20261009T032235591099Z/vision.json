@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "window_titles": [
+    "디아블로 IV"
+  ],
+  "yolo": {
+    "enabled": false,
+    "model_path": "app/vision/scene_source.py",
+    "confidence": 0.2,
+    "device": "0",
+    "image_size": 448,
+    "interval": 0.3,
+    "max_detections": 30,
+    "roi_x": 0.15,
+    "roi_y": 0.15,
+    "roi_width": 0.7,
+    "roi_height": 0.65
+  },
+  "semantic_gating": true,
+  "red_enemy_bar": {
+    "enabled": true,
+    "roi": [
+      0.15,
+      0.15,
+      0.85,
+      0.8
+    ],
+    "min_width": 20,
+    "max_width": 220,
+    "max_height": 12
+  },
+  "class_rules": {
+    "monster": {
+      "require_semantic": true,
+      "type": "monster",
+      "relation": "hostile",
+      "min_confidence": 0.6
+    },
+    "item": {
+      "type": "item",
+      "relation": "neutral",
+      "min_confidence": 0.7
+    },
+    "obstacle": {
+      "type": "obstacle",
+      "relation": "neutral",
+      "min_confidence": 0.6
+    }
+  },
+  "capture_fps": 60,
+  "learning_interval": 1,
+  "motion_gating": true
+}

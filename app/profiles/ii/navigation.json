@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "step_ms": 180,
+  "step_fraction": 0.16,
+  "obstacle_margin": 0.025,
+  "minimap": {
+    "enabled": false,
+    "bbox": null,
+    "player": [
+      0.5,
+      0.5
+    ],
+    "rotation_degrees": 0,
+    "walkable_hsv": [
+      [
+        [
+          0,
+          0,
+          100
+        ],
+        [
+          179,
+          100,
+          255
+        ]
+      ]
+    ],
+    "mapping": {
+      "enabled": false,
+      "mode": "wall_lines",
+      "center_weight": 4.0,
+      "preferred_clearance_px": 10,
+      "wall_margin_px": 1,
+      "calibrated": false,
+      "screen_pixels_per_map_pixel": 12
+    }
+  },
+  "steering": {
+    "projection": "isotropic",
+    "move_interval_ms": 120,
+    "require_minimap": true,
+    "player_screen": [
+      0.5,
+      0.5
+    ],
+    "infer_player_from_hud": false
+  },
+  "excluded_regions": [
+    [
+      0,
+      0.82,
+      1,
+      1
+    ]
+  ]
+}
