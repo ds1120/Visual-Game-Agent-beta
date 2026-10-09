@@ -14,6 +14,7 @@ from app.core.route_geometry import corridor_clear, shortcut_cost, supercover_ce
 
 class MinimapMemory:
     CELL = 4
+    registration_reset_seconds = 30.
 
     def __init__(self):
         self.lock = threading.RLock()
@@ -30,6 +31,7 @@ class MinimapMemory:
             self.cells = {}
             self.visits = {}
             self.travel_edges = set()
+            self.completed_goals = deque(maxlen=32)
             self.screen_obstacles=[]
             self.failures = deque(maxlen=32)
             self.pending = deque(maxlen=20)
@@ -50,6 +52,7 @@ class MinimapMemory:
             self.recovery_stage = 'none'
             self.last_failure_at = -1e9
             self.goal = None
+            self.replan_goal = None
             self.goal_heading = None
             self.goal_until = 0
             self.blocked_goal_heading = None
@@ -67,6 +70,34 @@ class MinimapMemory:
             self.last_lookahead = .05
             self.stuck = False
             self.movement = 0.
+            self.player_floor_sample = None
+
+    def _floor_player(self, mask, player, now):
+        """Recover a small marker/configuration offset without opening wall cells."""
+        h,w=mask.shape
+        grid=(mask[:h//self.CELL*self.CELL,:w//self.CELL*self.CELL]
+              .reshape(h//self.CELL,self.CELL,w//self.CELL,self.CELL).mean(axis=(1,3))>=160)
+        point=np.asarray(player)*[w,h]
+        x,y=np.floor(point/self.CELL).astype(int)
+        if not (0<=y<grid.shape[0] and 0<=x<grid.shape[1]):return player
+        if grid[y,x]:
+            self.player_floor_sample=None
+            return player
+        ys,xs=np.nonzero(grid)
+        if not len(xs):return player
+        centers=(np.column_stack((xs,ys))+.5)*self.CELL
+        distances=np.linalg.norm(centers-point,axis=1)
+        index=int(np.argmin(distances))
+        if distances[index]>self.CELL*2:
+            self.player_floor_sample=None
+            return player
+        key=(int(xs[index])-x,int(ys[index])-y)
+        previous=self.player_floor_sample
+        if previous is None or previous[0]!=key:
+            self.player_floor_sample=(key,now)
+            return player
+        if now-previous[1]<.08:return player
+        return (centers[index]/[w,h]).tolist()
 
     def suspend(self, reason=None):
         with self.lock:
@@ -84,7 +115,10 @@ class MinimapMemory:
 
     def request_replan(self):
         with self.lock:
+            if self.goal is not None:self.replan_goal=self.goal.copy()
             if self.goal is not None and self.position is not None:
+                # Failed destinations must not be selected again immediately.
+                self.completed_goals.append(self.goal.copy())
                 delta=self.goal-self.position;length=float(np.linalg.norm(delta))
                 if length>1e-6:self.blocked_goal_heading=delta/length
             self.goal=None;self.goal_heading=None;self.route=[]
@@ -372,7 +406,8 @@ class MinimapMemory:
             if not valid:
                 self.pending.clear();self.registration='unavailable';self.route=[]
                 self.reason='uncalibrated' if m.get('mapping',{}).get('calibrated') is False else 'terrain_invalid'
-                self.mask=None
+                # Keep the last registered crop for displaying the retained
+                # destination. valid=False still blocks planning and input.
                 return None
             if m.get('mapping',{}).get('mode')=='wall_lines':
                 hsv=cv2.cvtColor(roi,cv2.COLOR_BGR2HSV);gray=np.zeros(roi.shape[:2],np.uint8)
@@ -396,7 +431,7 @@ class MinimapMemory:
                 if shift is None:
                     if self.registration_failed_at is None:self.registration_failed_at=now
                     changed=float(cv2.absdiff(self.previous,gray).mean())>35
-                    if now-self.registration_failed_at<2 or not changed:
+                    if now-self.registration_failed_at<self.registration_reset_seconds or not changed:
                         # Retry against the last aligned image, never glue an
                         # unverified frame to the world or erase the active goal.
                         self.registration='unregistered'
@@ -417,7 +452,9 @@ class MinimapMemory:
                     self.registration_failed_at=None
                 self.registration=registration
             self.previous=gray
-            h,w=mask.shape;px,py=m['player'];position=self.origin+np.array([px*w,py*h])
+            h,w=mask.shape
+            measured_player=self._floor_player(mask,m['player'],now)
+            px,py=measured_player;position=self.origin+np.array([px*w,py*h])
             self.movement=0 if self.position is None else float(np.linalg.norm(position-self.position))
             recorded=self.recorded_position
             recorded_distance=0 if recorded is None else float(np.linalg.norm(position-recorded))
@@ -471,12 +508,16 @@ class MinimapMemory:
                     self.stuck=True
                     if now-self.last_failure_at>=m.get('stuck_seconds',2):
                         self.failures.append((now,start.copy(),direction))
-                        self.last_failure_at=now;self.recovery_count+=1;self.goal=None
-                        self.recovery_stage=('recenter','backtrack','detour','blocked')[min(3,self.recovery_count-1)]
+                        self.last_failure_at=now;self.recovery_count+=1
+                        # The agent confirms a wall with its movement skill before
+                        # releasing a locked destination. A stuck sample is only evidence.
+                        if not getattr(self,'lock_current_heading',False):
+                            self.goal=None
+                            self.recovery_stage=('recenter','backtrack','detour','blocked')[min(3,self.recovery_count-1)]
             self.pending=deque(remaining,maxlen=20)
             self.failures=deque((f for f in self.failures if now-f[0]<25),maxlen=32)
             self.mask=mask;self.grid=grid;self.last_update=now
-            self.player=list(m['player']);self.rotation=m['rotation_degrees']
+            self.player=list(measured_player);self.rotation=m['rotation_degrees']
             sx,sy=min(gw-1,int(px*w/self.CELL)),min(gh-1,int(py*h/self.CELL))
             self.walkable_ratio=float((mask>0).mean())
             self.player_walkable=bool(grid[sy,sx])
@@ -492,6 +533,13 @@ class MinimapMemory:
             if not self.keyframes or np.linalg.norm(self.origin-self.keyframes[-1][1])>=8:
                 self.keyframes.append((gray.copy(),self.origin.copy()))
             return mask
+
+    def planned_target(self):
+        """Destination survives temporary route loss; it is not an input approval."""
+        with self.lock:
+            goal=self.goal if self.goal is not None else self.replan_goal
+            if goal is None or self.mask is None:return None
+            return ((goal-self.origin)/np.array(self.mask.shape[::-1])).tolist()
 
     def atlas_snapshot(self):
         if not self.cells:return {'grid':[],'player':None,'bounds':None,'resolution':self.CELL,'archived_segments':len(self.archives)}
@@ -556,6 +604,27 @@ class MinimapMemory:
             if n<1e-6:return None
             angle=math.radians(self.rotation);c,s=math.cos(angle),math.sin(angle)
             heading=np.array([(dx*c-dy*s)/n,(dx*s+dy*c)/n])
+            continue_heading=(explore and target_world is None and self.recovery_stage=='none'
+                              and self.last_direction is not None and self.blocked_goal_heading is None
+                              and (self.goal is not None or not getattr(self,'prefer_unvisited',False)))
+            if continue_heading:
+                dx,dy=self.last_direction
+                heading=np.array([dx*c-dy*s,dx*s+dy*c])
+            locked_ray=None
+            if getattr(self,'lock_current_heading',False) and self.goal is not None and self.blocked_goal_heading is None:
+                start_point=np.asarray(self.player)*np.array(self.mask.shape[::-1])
+                endpoint=self.goal-self.origin
+                if corridor_clear(start_point/self.CELL,endpoint/self.CELL,self.grid,self.clearance,.5):
+                    locked_ray=endpoint
+                    target_world=self.goal.copy()
+            if continue_heading and getattr(self,'lock_current_heading',False) and self.goal is None:
+                start_point=np.asarray(self.player)*np.array(self.mask.shape[::-1])
+                for length in range(1,math.ceil(math.hypot(*self.mask.shape))):
+                    candidate=start_point+heading*length
+                    if not corridor_clear(start_point/self.CELL,candidate/self.CELL,self.grid,self.clearance,.5):break
+                    if length>=4:locked_ray=candidate
+                if locked_ray is not None:
+                    target_world=self.origin+locked_ray
             pin_target=self.pin_world if getattr(self,'follow_pin_route',False) else None
             if pin_target is not None and np.linalg.norm(pin_target-self.position)<=6:
                 self.route=[];self.reason='pin_arrived';return None
@@ -614,14 +683,19 @@ class MinimapMemory:
                 guide_weight=.03 if (getattr(self,'follow_centerline',False) or pin_target is not None and getattr(self,'pin_direction_priority',False)) else 3
                 penalties=penalties+orange_distance[np.ix_(ys,xs)]*guide_weight
             visits_cost=np.zeros(grid.shape,float)
+            world_keys={}
             if explore:
                 for ny,nx in np.argwhere(grid):
                     key=self._key(self.origin+np.array([(nx+.5)*self.CELL,(ny+.5)*self.CELL]))
+                    world_keys[(int(nx),int(ny))]=key
                     count=self.visits.get(key,0)
                     # Returning through travelled terrain is a fallback when
                     # no connected unexplored route remains.
                     visits_cost[ny,nx]=0 if not count else 8+2*min(count,5)
             distance={start:0.};parent={};queue=[(0.,start)]
+            reused={start:0};hops={start:0}
+            recent_keys={self._key(point) for point in list(self.breadcrumbs)[-24:]
+                         if np.linalg.norm(point-self.position)>=self.CELL*2}
             while queue:
                 cost,node=heapq.heappop(queue)
                 if cost>distance[node]:continue
@@ -632,8 +706,11 @@ class MinimapMemory:
                     if ox and oy and (not grid[y,nx] or not grid[ny,x]):continue
                     next_node=(nx,ny)
                     new=cost+math.hypot(ox,oy)*(1+penalties[ny,nx])+visits_cost[ny,nx]+(12 if next_node in failed_cells else 0)+(30 if next_node in screen_blocked else 0)
+                    if explore and tuple(sorted((world_keys[node],world_keys[next_node]))) in self.travel_edges:new+=8
                     if new<distance.get(next_node,float('inf')):
                         distance[next_node]=new;parent[next_node]=node;heapq.heappush(queue,(new,next_node))
+                        hops[next_node]=hops[node]+1
+                        reused[next_node]=reused[node]+int(explore and world_keys[next_node] in self.visits and math.hypot(nx-start[0],ny-start[1])>2)
             # Estimate how much unseen map a candidate player position reveals.
             # Integral counts keep this independent of the total accumulated map size.
             coverage=None
@@ -647,7 +724,7 @@ class MinimapMemory:
                 x=w+node[0]-start[0];y=h+node[1]-start[1]
                 count=coverage[y+h,x+w]-coverage[y,x+w]-coverage[y+h,x]+coverage[y,x]
                 return int(w*h-count)
-            best=None;best_score=(-1,-1,-1,-1,-1,-float('inf'))
+            best=None;best_score=(-float('inf'),)
             for node,cost in (distance.items() if target_world is None else ()):
                 delta=np.array(node)-start;length=float(np.linalg.norm(delta))
                 if length<(1 if self.recovery_stage=='recenter' else 3):continue
@@ -672,7 +749,17 @@ class MinimapMemory:
                     if fn and float(delta@f)/(length*fn)>.8:score-=30
                 # Pick the farthest reachable unexplored destination in the
                 # requested heading; route cost still determines how to get there.
-                priority=(int(not explore or self.recovery_stage!='none' or key not in self.visits),int(getattr(self,'direction_priority',False) and self.recovery_stage=='none' and float(delta@heading)/length>.35),length if explore and self.recovery_stage=='none' else 0,int(coverage is None or self.clearance[node[1],node[0]]>=self.preferred_clearance),reveal(node),score)
+                edge_band=min(node[0],node[1],w-1-node[0],h-1-node[1])//3
+                edge_priority=-edge_band if explore and self.recovery_stage=='none' else 0
+                alignment=float(delta@heading)/length
+                straight=(continue_heading and alignment>=.985 and
+                          corridor_clear(np.asarray(self.player)*np.array(self.mask.shape[::-1])/self.CELL,
+                                         np.asarray(node)+.5,grid,self.clearance,.5))
+                priority=(int(straight),edge_priority,int(not explore or self.recovery_stage!='none' or key not in self.visits),int(not explore or self.recovery_stage!='none' or key not in recent_keys),int(getattr(self,'direction_priority',False) and self.recovery_stage=='none' and alignment>.35),length if explore and self.recovery_stage=='none' else 0,int(coverage is None or self.clearance[node[1],node[0]]>=self.preferred_clearance),reveal(node),score)
+                if explore and self.recovery_stage=='none' and getattr(self,'prefer_unvisited',False):
+                    world=self.origin+(np.array(node)+.5)*self.CELL
+                    repeats=sum(np.linalg.norm(world-goal)<=self.CELL*3 for goal in self.completed_goals)
+                    priority=(-repeats,int(key not in self.visits),int(key not in recent_keys),-reused[node]/max(1,hops[node]))+priority
                 if priority>best_score:best,best_score=node,priority
             if self.recovery_stage=='backtrack':
                 for position in reversed(self.breadcrumbs):
@@ -745,6 +832,7 @@ class MinimapMemory:
                 if best is None:self.route=[];return None
                 if not keep_goal:
                     self.goal=self.origin+(np.array(best)+.5)*self.CELL;self.goal_heading=heading.copy();self.goal_until=now+4
+            self.replan_goal=None
             path=[best]
             while path[-1]!=start:path.append(parent[path[-1]])
             path.reverse();self.route=[[(x+.5)/w,(y+.5)/h] for x,y in path]
@@ -768,6 +856,8 @@ class MinimapMemory:
                 if not corridor_clear(start_point,point,grid,self.clearance,minimum):continue
                 if shortcut_cost(start_point,point,self.clearance,center_weight)>path_cost*(1.02 if getattr(self,'follow_centerline',False) else 1.1):continue
                 waypoint=node;waypoint_index=index
+            if locked_ray is not None:
+                waypoint=best;waypoint_index=len(path)-1
             if waypoint is None:
                 if target_world is not None and best==start and corridor_clear(start_point,(target_world-self.origin)/self.CELL,grid,self.clearance,0):
                     waypoint=start

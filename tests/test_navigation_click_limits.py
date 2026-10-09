@@ -1,5 +1,4 @@
 import unittest
-from types import SimpleNamespace
 
 import numpy as np
 
@@ -27,8 +26,6 @@ class NavigationClickLimitTests(unittest.TestCase):
 
     def test_obscured_endpoint_can_use_shorter_click_on_same_route(self):
         settings=self.settings()
-        obstacle=SimpleNamespace(object_type='npc',detector_type='npc',
-            confidence=1.,bbox=(1020,535,1030,545))
         # A narrow excluded HUD region blocks only the full-distance endpoint.
         settings['excluded_regions']=[(.529,.49,.531,.51)]
         result=LocalNavigator().choose((1,0),[],(1080,1920,3),settings,

@@ -1,6 +1,7 @@
 import asyncio
 import time
 import unittest
+from dataclasses import replace
 from unittest.mock import AsyncMock
 
 from app.core.action_command import ActionCommand
@@ -31,6 +32,23 @@ class MoveBurstTests(unittest.IsolatedAsyncioTestCase):
         self.controller.move.return_value=False
         self.assertFalse(await self.executor.execute(self.command))
         self.assertEqual(self.controller.move.await_count,1)
+
+    async def test_slow_first_click_does_not_expire_remaining_burst(self):
+        command=replace(self.command,expires_at=time.monotonic()+.03)
+        async def slow_click(c):
+            await asyncio.sleep(.04)
+            return True
+        self.controller.move.side_effect=slow_click
+        self.executor.validator=lambda c:not c.is_expired()
+        self.assertTrue(await self.executor.execute(command))
+        self.assertTrue(command.is_expired())
+        self.assertEqual(self.controller.move.await_count,3)
+        self.assertEqual(len(self.executor.input_events),3)
+
+    async def test_expired_queued_command_never_sends_first_click(self):
+        command=replace(self.command,expires_at=time.monotonic()-1)
+        self.assertFalse(await self.executor.execute(command))
+        self.assertEqual(self.controller.move.await_count,0)
 
     async def test_stop_cancels_burst_before_next_click(self):
         scheduler=ActionScheduler(self.executor)

@@ -5,6 +5,10 @@
   "attack_require_health_feedback": true,
   "require_foreground": true,
   "tap_ms": 15,
+  "movement_skill": {
+    "enabled": true,
+    "key": "3"
+  },
   "bindings": {
     "ATTACK": "mouse_right",
     "TAKE": "mouse_left",
@@ -35,7 +39,7 @@
       "name": "공격 버프",
       "key": "2",
       "enabled": true,
-      "cooldown_ms": 3200
+      "cooldown_ms": 1200
     },
     {
       "id": "skill_1791289709260_3",

@@ -525,7 +525,12 @@ class AgentBridge:
         if self.last_seen is None or self.hp_disconnect_reason:
             return
         a = self.agent
-        if a._processing_halted or getattr(a,'_focus_paused',False) or not a._foreground():
+        if getattr(a,'movement_test_mode',False):
+            self.hp_missing_since=None
+            return
+        # Game-focused play must not be halted by the web HP deadline.
+        # Capture/HUD workers and per-input validation remain independent.
+        if a._foreground() or a._processing_halted or getattr(a,'_focus_paused',False):
             self.hp_missing_since = None
             return
         hud = a._latest_hud_state

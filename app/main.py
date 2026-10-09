@@ -124,6 +124,11 @@ async def main() -> None:
         },
     )
 
+    agent.movement_test_mode=cfg.getboolean('AGENT','movement_test_mode',fallback=False)
+    agent.minimap_memory.registration_reset_seconds=max(2,min(300,cfg.getfloat('AGENT','minimap_reset_wait_seconds',fallback=30)))
+    if agent.movement_test_mode:
+        agent._move_only=True
+        print('[MODE] 이동 테스트 · HP/SP/MP/버프/스킬 검사 중지 · 미니맵 이동만 실행')
     bridge = None
     if args.web:
         from app.web.bridge import AgentBridge

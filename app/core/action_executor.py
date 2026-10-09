@@ -46,9 +46,10 @@ class ActionExecutor:
 
     async def execute(self, command: ActionCommand) -> bool:
         self.requested_command = command
-        if not self._running or (self.validator and not self.validator(command)):
+        if not self._running or command.is_expired() or (self.validator and not self.validator(command)):
             await self.release_held_attack()
-            self.last_error = "HP·전경·센서·대상 검증으로 입력 차단"
+            owner=getattr(self.validator,'__self__',None)
+            self.last_error = getattr(owner,'_input_block_reason',None) or "HP·전경·센서·대상 검증으로 입력 차단"
             self._observe(command, "blocked")
             return False
         action = command.action_type
@@ -79,13 +80,17 @@ class ActionExecutor:
                         return False
                     self._observe(basic, 'sent')
             count=max(1,min(3,command.move_clicks)) if action=='MOVE' and command.target is not None else 1
+            current=command
             for index in range(count):
                 if index:
                     await asyncio.sleep(.05)
-                    if (not self._running or command.is_expired()
-                            or self.validator and not self.validator(command)):
+                    # Request TTL covers queueing/planning, not a fresh guarded
+                    # continuation after a successful (possibly slow HID) click.
+                    current=replace(command,expires_at=time.monotonic()+.15)
+                    if (not self._running
+                            or self.validator and not self.validator(current)):
                         return True  # Earlier clicks were already sent.
-                result = await handler(command)
+                result = await handler(current)
                 reported = False
                 if result is False:break
                 if index<count-1:
@@ -109,6 +114,12 @@ class ActionExecutor:
             if status!='sent' or not reported:self._observe(command, status)
 
     def _observe(self, command, status):
+        if command.action_type=='MOVE' and status in {'blocked','failed'}:
+            message=f'[MOVE INPUT] {status}: {self.last_error}'
+            now=time.monotonic()
+            if message!=getattr(self,'_move_error_message',None) or now-getattr(self,'_move_error_at',0)>=2:
+                print(message)
+                self._move_error_message=message;self._move_error_at=now
         # Record blocked inputs and the basic hold sent before a rotation skill too.
         if command.action_type != "STOP" or not self.input_events or self.input_events[-1]["command"].action_type != "STOP" or self.input_events[-1]["status"] != status:
             self._event_seq += 1

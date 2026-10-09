@@ -209,10 +209,223 @@ class NonYoloAgent(VisualAgent):
         self._hp_display_value=None
         self._hp_display_missing_at=time.monotonic()
 
+    async def _idle_sensor_loop(self):
+        while self._running:await asyncio.sleep(.1)
+
+    async def _movement_test_loop(self):
+        while self._running:
+            if self._paused or self._processing_halted or not self._foreground() or not self._fresh():
+                await asyncio.sleep(.05)
+                continue
+            heading=getattr(self,'_hunt_preferred_direction',None) or self.minimap_memory.last_direction or (1.,0.)
+            c=command('MOVE',source='HUNT_EXPLORE',direction=heading,epoch=self._epoch)
+            self._review_missing_navigation_route()
+            self._recover_rejected_movement()
+            if getattr(self,'_stationary_skill_mode',False):
+                skill=self._hunt_attack_rotation(command('ATTACK',source='MANUAL_SKILL',epoch=self._epoch))
+                if skill is not None:await self.scheduler.submit(skill)
+                await asyncio.sleep(.05)
+                continue
+            if getattr(self,'_manual_skill_mode',False) or getattr(self,'_repeat_skills_hunting',False):
+                if await self._manual_skill_tick():
+                    await asyncio.sleep(.05)
+                    continue
+            if not getattr(self,'_manual_skill_mode',False) and self._movement_hunt_enabled():
+                attack=self._movement_hunt_command()
+                if attack is not None:
+                    self._last_requested_command=attack
+                    await self.scheduler.submit(attack)
+                    await asyncio.sleep(.1)
+                    continue
+            if await self._try_navigation_escape():
+                await asyncio.sleep(.05)
+                continue
+            if not self._continue_navigation(c):
+                if await self._try_navigation_escape():
+                    await asyncio.sleep(.05)
+                    continue
+                settings=copy.deepcopy(self._docs['navigation.json'])
+                c=self._prepare_navigation(c,settings)
+                if c.action_type=='MOVE':
+                    step=self.navigator.choose(c.direction,self._objects,self._latest_frame.shape,settings,self._minimap_mask)
+                    if step is None:
+                        self._navigation_click_failed(c)
+                        c=command('STOP',reason='PATH_BLOCKED',epoch=self._epoch)
+                    else:c=replace(c,direction=step[0],target=step[1])
+                c=self._finalize_navigation_command(c)
+                self._last_requested_command=c
+                if self._dispatch_action(c):await self.scheduler.submit(c)
+            await asyncio.sleep(.05)
+
+    async def _manual_skill_tick(self):
+        pending=getattr(self,'_manual_skill_pending_at',None)
+        if pending is not None:
+            if time.monotonic()-pending<1.5:return True
+            self._manual_skill_pending_at=None
+            self._manual_skill_move_required=True
+            self._manual_skill_resume_until=time.monotonic()+.15
+        if getattr(self,'_manual_skill_move_required',False):
+            if time.monotonic()<getattr(self,'_manual_skill_resume_until',0):return False
+            # A blocked movement must never suspend explicit skill repetition.
+            self._manual_skill_move_required=False
+        skill=self._hunt_attack_rotation(command('ATTACK',source='MANUAL_SKILL',epoch=self._epoch))
+        if skill is None:return False
+        self._manual_skill_pending_at=time.monotonic()
+        await self.scheduler.submit(skill)
+        return True
+
+    def _movement_hunt_enabled(self):
+        return (getattr(self,'_movement_hunt_requested',False)
+                and self._hunt_active and not self._move_only and not self._paused)
+
+    def _movement_hunt_command(self):
+        if not self._movement_hunt_enabled() or self.profile.name!='diablo4':return None
+        frame=self._latest_frame
+        live=self._confirm_diablo_enemies(frame)
+        self.combat_feedback.annotate(frame,live,self._docs.get('vision.json',{}).get('enemy_health_bar',{}))
+        self._objects=live;self._latest_yolo_objects=live;self._yolo_at=time.monotonic()
+        self.combat_guard.observe(live)
+        now=time.monotonic()
+        focused=getattr(self,'_movement_hunt_target',None)
+        current=next((o for o in live if o.track_id==focused and o.enemy_bar_confirmed
+                      and o.relation=='hostile' and not self.combat_guard.is_blocked(o)),None)
+        if focused is not None and current is None:
+            if self.combat_guard.blocked.get(focused)=='HEALTH_DEPLETED_CONFIRMED':
+                self._movement_hunt_target=None;self._movement_target_missing=None
+            else:
+                missing=getattr(self,'_movement_target_missing',None)
+                if missing is None:missing=(now,0)
+                missing=(missing[0],missing[1]+1);self._movement_target_missing=missing
+                if now-missing[0]<1 or missing[1]<3:
+                    return command('STOP',source='MOVEMENT_HUNT',reason='MONSTER_RESULT_WAIT',epoch=self._epoch)
+                # Sustained loss ends engagement without claiming an unseen death.
+                self._movement_hunt_target=None;self._movement_target_missing=None
+        enemies=[o for o in live if o.enemy_bar_confirmed and o.relation=='hostile'
+                 and not self.combat_guard.is_blocked(o) and self.combat_guard.permits(o.track_id)]
+        if not enemies:return None
+        h,w=frame.shape[:2];origin=self._world_player_origin()
+        def center(o):
+            x1,y1,x2,y2=o.bbox
+            return ((x1+x2)/2/w,(y1+y2)/2/h)
+        target=current or min(enemies,key=lambda o:np.linalg.norm(np.asarray(center(o))-origin))
+        self._movement_hunt_target=target.track_id;self._movement_target_missing=None
+        combat_settings=dict(self._docs['input.json'],attack_until_bar_lost=True)
+        if not self.combat_guard.request(target,combat_settings):
+            return command('STOP',source='MOVEMENT_HUNT',reason='MONSTER_RESULT_WAIT',epoch=self._epoch)
+        attack=command('ATTACK',source='MOVEMENT_HUNT',target=center(target),track_id=target.track_id,epoch=self._epoch)
+        return self._hunt_attack_rotation(attack) or command('STOP',source='MOVEMENT_HUNT',reason='COMBAT_COOLDOWN',epoch=self._epoch)
+
+    def _hunt_attack_rotation(self,attack):
+        settings=self._docs['input.json']
+        disabled=settings.get('disabled_actions',[])
+        choices=([attack] if attack.source=='MOVEMENT_HUNT' and getattr(self,'_repeat_skills_hunting',False)
+                 and 'ATTACK' not in disabled else [])
+        if 'USE_SKILL' not in disabled:
+            choices.extend(replace(attack,action_type='USE_SKILL',skill_id=s['id'],
+                                   maintain_attack=False,cooldown=s['cooldown_ms']/1000)
+                           for s in settings.get('attack_skills',[]) if s.get('enabled',False))
+        if not choices:return None
+        start=getattr(self,'_hunt_rotation_index',0)%len(choices)
+        for offset in range(len(choices)):
+            index=(start+offset)%len(choices)
+            candidate=choices[index]
+            if self.scheduler._is_cooldown_ready(candidate):
+                self._hunt_rotation_index=(index+1)%len(choices)
+                return candidate
+        return None
+
+    def _escape_cursor_target(self):
+        memory=self.minimap_memory
+        with memory.lock:
+            if not memory.snapshot()['valid'] or memory.mask is None or memory.grid is None:return None
+            direction=memory.last_direction
+            if direction is None and memory.goal is not None and memory.position is not None:
+                vector=memory.goal-memory.position
+                norm=float(np.linalg.norm(vector))
+                if norm:
+                    a=math.radians(memory.rotation);x,y=vector/norm
+                    direction=(x*math.cos(a)+y*math.sin(a),-x*math.sin(a)+y*math.cos(a))
+            if direction is None:return None
+            # This is a bounded wall probe, not a normal terrain-approved click.
+            # Aim far along the current heading before pressing the registered skill.
+            h,w=self._latest_frame.shape[:2]
+            origin=self._world_player_origin()
+            limits=[]
+            for component,coordinate,size in ((direction[0],origin[0],w),(direction[1],origin[1],h)):
+                if abs(component)>1e-6:limits.append(max(0,((.98 if component>0 else .02)-coordinate)*size/component))
+            distance=min(limits) if limits else 0
+            zones=self._world_click_exclusions()
+            for fraction in np.linspace(1,.05,40):
+                target=(origin[0]+direction[0]*distance*fraction/w,origin[1]+direction[1]*distance*fraction/h)
+                if self.navigator.click_is_clear(target,self._objects,self._latest_frame.shape,zones,origin,18/w):return target
+            return None
+
+    async def _try_navigation_escape(self):
+        memory=self.minimap_memory
+        attempt=getattr(self,'_navigation_escape',None)
+        now=time.monotonic()
+        if attempt is not None:
+            if attempt['epoch']!=self._epoch or attempt['segment']!=memory.segment:
+                self._navigation_escape=None
+                return False
+            if not memory.snapshot()['valid']:
+                attempt['valid_since']=None
+                if attempt.get('map_wait_since') is None:attempt['map_wait_since']=now
+                if now-attempt['map_wait_since']>=1:
+                    memory.request_replan()
+                    self.click_journey.reset('player_map_wait_timeout',preserve_record=True)
+                    self._navigation_escape=None
+                    self._wall_probe_pending=False
+                    self.emit_web_event('navigation_goal_released',reason='player_map_wait_timeout')
+                    return False
+                return True
+            attempt['map_wait_since']=None
+            active=self.scheduler.executor.active_command
+            if active is not None and active.source=='NAVIGATION_ESCAPE':return True
+            if memory.position is not None and np.linalg.norm(memory.position-attempt['position'])>=1.5:
+                self._navigation_escape=None
+                memory.pending.clear();memory.recovery_count=0;memory.recovery_stage='none'
+                return False
+            valid_since=attempt.get('valid_since')
+            if valid_since is None:
+                attempt['valid_since']=now
+                return True
+            if now-max(attempt['at'],valid_since)<1.2:return True
+            memory.request_replan()
+            self.click_journey._release('escape_failed')
+            self.click_journey.reset('escape_failed',preserve_record=True)
+            self._navigation_escape=None
+            self.emit_web_event('navigation_goal_released',reason='escape_failed')
+            return False
+        if (self.click_journey.last_release!='stalled' and not getattr(self,'_wall_probe_pending',False)) or memory.position is None:return False
+        self._wall_probe_pending=False
+        if ('DODGE' in self._docs['input.json'].get('disabled_actions',[])
+                or not self._docs['input.json'].get('movement_skill',{}).get('enabled',False)):
+            memory.request_replan()
+            self.click_journey._release('escape_disabled')
+            self.click_journey.reset('escape_disabled',preserve_record=True)
+            return False
+        target=self._escape_cursor_target()
+        if target is None:
+            memory.request_replan()
+            self.click_journey._release('escape_no_target')
+            self.click_journey.reset('escape_no_target',preserve_record=True)
+            return False
+        self._navigation_escape={'epoch':self._epoch,'segment':memory.segment,
+                                 'position':memory.position.copy(),'at':now}
+        memory.pending.clear()
+        self.click_journey._release('escape_attempt')
+        self.click_journey.reset('escape_attempt',preserve_record=True)
+        await self.scheduler.submit(command('DODGE',source='NAVIGATION_ESCAPE',
+            target=target,reason='이동 정체 · 먼 진행 방향에 커서 이동 후 이동 스킬',epoch=self._epoch))
+        return True
+
     def _fresh(self):
         # A 2-3 FPS capture can exceed the legacy 0.5s HUD interval.
         # Only a still-valid recent measurement is usable; missing HP stays blocked.
         now=time.monotonic()
+        if getattr(self,'movement_test_mode',False):
+            return self._latest_frame is not None and now-self._capture_at<1
         return (self._latest_frame is not None and now-self._capture_at<1
                 and now-self._hud_at<.8)
 
@@ -224,12 +437,132 @@ class NonYoloAgent(VisualAgent):
         self.buff_monitor.threshold=self._buff_threshold
         self.buff_monitor.stable_icon=True
 
+    async def _dodge_after_movement_skill(self,c):
+        await asyncio.sleep(1)
+        if (not self._running or self._paused or self._processing_halted
+                or c.decision_epoch!=self._epoch or not self._foreground() or not self._fresh()):return
+        await self.scheduler.submit(command('DODGE',source='NAVIGATION_DODGE',target=c.target,
+                                            reason='이동 스킬 전송 1초 후 회피',epoch=self._epoch))
+
     def _record_input(self,c,status,error=None):
+        if c.action_type=='MOVE' and c.source in self.click_journey.SOURCES:
+            if status=='sent':self._rejected_move_sample=None
+            elif status in {'blocked','failed'}:self._remember_rejected_movement(c)
+        if c.source=='MANUAL_SKILL' and status in {'sent','blocked','failed'}:
+            self._manual_skill_pending_at=None
+            self._manual_skill_move_required=True
+            self._manual_skill_resume_until=time.monotonic()+.15
+        if c.action_type=='MOVE' and status=='sent':self._manual_skill_move_required=False
+        if c.source=='NAVIGATION_ESCAPE' and status=='sent':
+            attempt=getattr(self,'_navigation_escape',None)
+            if attempt is not None and attempt['epoch']==c.decision_epoch:
+                attempt['at']=time.monotonic()
+            task=getattr(self,'_post_movement_dodge_task',None)
+            if task is not None and not task.done():task.cancel()
+            self._post_movement_dodge_task=asyncio.create_task(self._dodge_after_movement_skill(c))
         super()._record_input(c,status,error)
         if hasattr(self,'minimap_memory'):self.minimap_memory.on_input(c,status,error)
         if hasattr(self,'click_journey'):
             with self.minimap_memory.lock:
                 self.click_journey.on_input(c,status,time.monotonic(),position=self.minimap_memory.position)
+
+    def _remember_rejected_movement(self,c):
+        memory=self.minimap_memory
+        key=(c.decision_epoch,memory.segment)
+        previous=getattr(self,'_rejected_move_sample',None)
+        if previous is None or previous[0]!=key:
+            self._rejected_move_sample=(key,time.monotonic(),memory.last_update)
+
+    def _recover_rejected_movement(self,now=None):
+        sample=getattr(self,'_rejected_move_sample',None)
+        if sample is None:return False
+        now=time.monotonic() if now is None else now
+        memory=self.minimap_memory
+        with memory.lock:
+            if sample[0]!=(self._epoch,memory.segment):
+                self._rejected_move_sample=None
+                return False
+            if now-sample[1]<1 or memory.last_update<=sample[2] or not memory.snapshot()['valid']:return False
+            active=self.scheduler.executor.active_command
+            if active is not None:return False
+            memory.request_replan()
+            self.click_journey.reset('click_rejected_timeout',preserve_record=True)
+            self._next_navigation_plan=None
+            self._rejected_move_sample=None
+            self.emit_web_event('navigation_goal_released',reason='click_rejected_timeout')
+            return True
+
+    def _mapped_click_navigation(self):
+        return (self._docs['input.json']['movement']['mode']=='click'
+                and self._docs['navigation.json']['minimap'].get('mapping',{}).get('enabled',False))
+
+    def _review_missing_navigation_route(self,now=None):
+        if self._movement_hunt_enabled() and getattr(self,'_movement_hunt_target',None) is not None:
+            self._missing_route_sample=None
+            return False
+        now=time.monotonic() if now is None else now
+        memory=self.minimap_memory
+        with memory.lock:
+            state=memory.snapshot(now=now)
+            key=(self._epoch,memory.segment)
+            if state['valid'] and len(memory.route)>1:
+                self._missing_route_sample=None
+                return False
+            if memory.goal is None and memory.replan_goal is None:
+                self._missing_route_sample=None
+                return False
+            sample=getattr(self,'_missing_route_sample',None)
+            if sample is None or sample[0]!=key:
+                self._missing_route_sample=(key,now,False)
+                return False
+            if sample[2] or now-sample[1]<1:return False
+            active=self.scheduler.executor.active_command
+            if active is not None and active.action_type in {'MOVE','DODGE'}:return False
+            memory.request_replan()
+            self.click_journey._release('route_missing_timeout')
+            self.click_journey.reset('route_missing_timeout',preserve_record=True)
+            self._navigation_escape=None;self._wall_probe_pending=False
+            self._next_navigation_plan=None
+            self._missing_route_sample=(key,sample[1],True)
+            self.emit_web_event('navigation_goal_released',reason='route_missing_timeout')
+            return True
+
+    def _check_map_goal_arrival(self,c):
+        memory=self.minimap_memory
+        with memory.lock:
+            if (memory.goal is None or memory.position is None or not memory.snapshot()['valid']):
+                self._map_arrival_sample=None
+                return False
+            distance=float(np.linalg.norm(memory.position-memory.goal))
+            # Grid quantization can leave the player across a cell boundary
+            # despite visibly reaching the endpoint. Require two fresh samples.
+            arrival_radius=max(4.,min(6.,memory.CELL*1.5))
+            if distance>arrival_radius:
+                self._map_arrival_sample=None
+                return False
+            from app.core.route_geometry import corridor_clear
+            if memory.grid is not None and not corridor_clear(
+                    (memory.position-memory.origin)/memory.CELL,
+                    (memory.goal-memory.origin)/memory.CELL,memory.grid,memory.clearance,0):
+                self._map_arrival_sample=None
+                return False
+            key=(c.decision_epoch,memory.segment,tuple(memory.goal))
+            previous=getattr(self,'_map_arrival_sample',None)
+            if previous is None or previous[0]!=key:
+                self._map_arrival_sample=(key,memory.last_update)
+                return False
+            if memory.last_update-previous[1]<.08:return False
+            self.click_journey._release('map_goal_arrived',position=memory.position)
+            self.click_journey.reset('map_goal_arrived',preserve_record=True)
+            memory.completed_goals.append(memory.goal.copy())
+            memory.replan_goal=None
+            memory.goal=None;memory.goal_heading=None;memory.goal_until=0;memory.route=[]
+            self._map_arrival_sample=None
+            self._next_navigation_plan=None
+            self._navigation_escape=None
+            self._wall_probe_pending=False
+            self.emit_web_event('navigation_goal_released',reason='map_goal_arrived')
+            return True
 
     def _continue_navigation(self,c):
         if (c.action_type!='MOVE' or c.source not in self.click_journey.SOURCES
@@ -238,17 +571,22 @@ class NonYoloAgent(VisualAgent):
             return False
         memory=self.minimap_memory
         self.click_journey.feedback_steps=self._docs['navigation.json']['minimap'].get('mapping',{}).get('control_mode')=='feedback_steps'
+        self.click_journey.arrival_only=True
         with memory.lock:
             state=memory.snapshot();now=time.monotonic()
             if memory.position is None:return False
             active=self.scheduler.executor.active_command
             if active is not None and active.action_type=='MOVE' and active.decision_epoch==c.decision_epoch:
                 return True
+            if memory.goal is None:
+                self.click_journey.reset('missing_destination',preserve_record=True)
+                return False
             # Hold the plan during the short queue-to-pointer handoff too.
             if self.scheduler.running and any(p['epoch']==c.decision_epoch and p['segment']==memory.segment
                     and now-key<.5 for key,p in self.click_journey.pending.items()):return True
+            if self._check_map_goal_arrival(c):return False
             record=self.click_journey.record
-            if (c.source in {'HUNT_EXPLORE','MINIMAP_QWEN'} and record
+            if (c.source in self.click_journey.SOURCES and record
                     and record['epoch']==c.decision_epoch and record['segment']==memory.segment
                     and (self.click_journey.current is not None or self.click_journey.last_release in {'stalled','waypoint_arrived','step_progress','step_refresh'})):
                 blocked=memory.destination_blocked(record.get('destination',record['goal']),now)
@@ -257,6 +595,11 @@ class NonYoloAgent(VisualAgent):
                     if sample is None or sample[0]!=record['goal_id']:
                         self._blocked_goal_sample=(record['goal_id'],memory.last_update)
                     elif memory.last_update-sample[1]>=.08:
+                        if self._mapped_click_navigation():
+                            self._wall_probe_pending=True
+                            self.click_journey._release('wall_probe')
+                            self._blocked_goal_sample=None
+                            return False
                         delta=record.get('destination',record['goal'])-memory.position
                         length=float(np.linalg.norm(delta))
                         memory.blocked_goal_heading=delta/length if length>1e-6 else None
@@ -281,6 +624,7 @@ class NonYoloAgent(VisualAgent):
             return keep
 
     def _request_stall_obstacles(self):
+        if getattr(self,'movement_test_mode',False):return
         if getattr(self,'_follow_orange_route',False) or self._hunt_active and self.minimap_memory.pin_world is not None:return
         now=time.monotonic();task=getattr(self,'_obstacle_scan_task',None)
         if (self._latest_frame is None or not self._foreground() or self._paused
@@ -359,6 +703,7 @@ class NonYoloAgent(VisualAgent):
         if c.action_type=='STOP' and (c.reason in journey.PASSIVE_STOPS or c.source in {'SEMANTIC_WAIT','COMBAT_TRACK_WAIT'}):return True
         nav=self._docs['navigation.json'];mapping=nav['minimap'].get('mapping',{})
         journey.feedback_steps=mapping.get('control_mode')=='feedback_steps'
+        journey.arrival_only=True
         if (c.action_type!='MOVE' or c.source not in journey.SOURCES
                 or self._docs['input.json']['movement']['mode']!='click'
                 or not mapping.get('enabled',False) or c.target is None):
@@ -400,7 +745,7 @@ class NonYoloAgent(VisualAgent):
             if frame_key==processed_frame:
                 await asyncio.sleep(.03);continue
             processed_frame=frame_key
-            if self._paused or self._hud_rechecking or not self._hud_ready:
+            if self._paused or (not getattr(self,'movement_test_mode',False) and (self._hud_rechecking or not self._hud_ready)):
                 self.navigation_monitor.reset();self.minimap_memory.suspend()
             settings=copy.deepcopy(self._docs['navigation.json']);epoch=self._epoch
             frame=self._latest_frame.copy()
@@ -414,6 +759,9 @@ class NonYoloAgent(VisualAgent):
                     self.emit_web_event('minimap_error',message=f'미니맵 처리 오류: {exc}')
                     await asyncio.sleep(1);continue
                 state=self.minimap_memory.snapshot()
+                if not self._paused:
+                    self._review_missing_navigation_route()
+                    self._recover_rejected_movement()
                 player=settings['minimap']['player']
             else:
                 player=self.navigation_monitor.update(frame,settings)
@@ -490,19 +838,22 @@ class NonYoloAgent(VisualAgent):
         memory=self.minimap_memory
         self._next_navigation_plan=None
         with memory.lock:
-            if (memory.pin_world is not None and c.source in {'HUNT_EXPLORE','MINIMAP_QWEN'}
+            memory.lock_current_heading=self._mapped_click_navigation()
+            memory.prefer_unvisited=self._mapped_click_navigation()
+            if (memory.pin_world is not None and not getattr(self,'movement_test_mode',False) and c.source in {'HUNT_EXPLORE','MINIMAP_QWEN'}
                     and getattr(self,'_planned_pin_segment',None)!=memory.segment):
                 memory.goal=None;memory.route=[]
                 self.click_journey.reset('pin_target_selected')
                 self._planned_pin_segment=memory.segment
-            memory.follow_pin_route=c.source in {'HUNT_EXPLORE','MINIMAP_QWEN'}
+            memory.follow_pin_route=c.source in {'HUNT_EXPLORE','MINIMAP_QWEN'} and not getattr(self,'movement_test_mode',False)
             memory.pin_direction_priority=mapping.get('pin_direction_priority',True)
-            memory.follow_orange_route=bool(getattr(self,'_follow_orange_route',False)) and c.source in {'HUNT_EXPLORE','MINIMAP_QWEN'}
+            memory.follow_orange_route=bool(getattr(self,'_follow_orange_route',False)) and c.source in {'HUNT_EXPLORE','MINIMAP_QWEN'} and not getattr(self,'movement_test_mode',False)
             memory.explore_without_guide=mapping.get('explore_without_guide',True) and c.source in {'HUNT_EXPLORE','MINIMAP_QWEN'}
             memory.direction_priority=bool(preferred) or c.source in {'HUNT_EXPLORE','MINIMAP_QWEN'}
             record=self.click_journey.record
-            if (self.click_journey.last_release in {'arrived','near_goal'} and record
+            if (self.click_journey.last_release in {'arrived','near_goal','destination_passed'} and record
                     and getattr(self,'_planned_after_arrival',None)!=record['goal_id']):
+                memory.completed_goals.append(record.get('destination',record['goal']).copy())
                 memory.goal=None;memory.goal_heading=None;memory.goal_until=0;memory.route=[]
                 if c.source in {'HUNT_EXPLORE','MINIMAP_QWEN'} and not preferred:
                     delta=record.get('destination',record['goal'])-record.get('destination_start',record['start']);length=float(np.linalg.norm(delta))
@@ -520,13 +871,16 @@ class NonYoloAgent(VisualAgent):
             # against a second fresh map, then release it here as well as in the
             # active-click continuation path.
             blocked_goal=(record.get('destination',record['goal']) if retained else memory.goal)
-            if plan is None and c.source in {'HUNT_EXPLORE','MINIMAP_QWEN'} and blocked_goal is not None:
+            if plan is None and c.source in self.click_journey.SOURCES and blocked_goal is not None:
                 key=(c.decision_epoch,memory.segment,tuple(blocked_goal))
                 sample=getattr(self,'_unreachable_plan_sample',None)
                 if memory.destination_blocked(blocked_goal) is True:
                     if sample is None or sample[0]!=key:
                         self._unreachable_plan_sample=(key,memory.last_update)
                     elif memory.last_update-sample[1]>=.08:
+                        if self._mapped_click_navigation():
+                            self._wall_probe_pending=True
+                            return command('STOP',reason='WALL_PROBE_PENDING',epoch=c.decision_epoch)
                         if self.click_journey.record is not None:
                             self.click_journey._release('goal_blocked',position=memory.position)
                         self.click_journey.reset('goal_blocked',preserve_record=True)
@@ -571,6 +925,46 @@ class NonYoloAgent(VisualAgent):
                 if getattr(self,'_follow_orange_route',False) else 'NO_CENTER_PATH')
         return command('STOP',source='NAVIGATION',reason=reason,epoch=c.decision_epoch)
 
+    def _navigation_click_failed(self,c):
+        if c.source not in self.click_journey.SOURCES:return
+        self._remember_rejected_movement(c)
+        if getattr(self.navigator,'last_block_reason',None)=='클릭 위치가 객체와 겹치거나 캐릭터에 너무 가까움':
+            memory=self.minimap_memory
+            with memory.lock:
+                if not memory.snapshot()['valid'] or memory.goal is None:return
+                sample=getattr(self,'_object_click_failure',None)
+                key=(c.decision_epoch,memory.segment,tuple(memory.goal))
+                if sample is None or sample[0]!=key:
+                    self._object_click_failure=(key,memory.last_update)
+                elif memory.last_update-sample[1]>=.08:
+                    memory.request_replan()
+                    self.click_journey.reset('object_click_blocked',preserve_record=True)
+                    self._object_click_failure=None
+            return
+        if (self._mapped_click_navigation()
+                and getattr(self.navigator,'last_block_reason',None)!='지도에서 클릭까지의 통로가 차단됨'):
+            return
+        memory=self.minimap_memory
+        with memory.lock:
+            if not memory.snapshot()['valid'] or memory.goal is None:return
+            key=(c.decision_epoch,memory.segment,tuple(memory.goal))
+            previous=getattr(self,'_click_failure_sample',None)
+            if previous is None or previous[0]!=key:
+                self._click_failure_sample=(key,memory.last_update)
+                return
+            if memory.last_update-previous[1]<.08:return
+            if self._mapped_click_navigation():
+                self._wall_probe_pending=True
+                self._click_failure_sample=None
+                return
+            # A fresh map confirming the same unusable screen click must not
+            # lock us forever to that destination. Keep map/visited evidence.
+            memory.request_replan()
+            self.click_journey.reset('click_target_blocked',preserve_record=True)
+            self._next_navigation_plan=None
+            self._click_failure_sample=None
+            self.emit_web_event('navigation_goal_released',reason='click_target_blocked')
+
     def _prepare_hud_probe(self,settings):
         # Never insert a blind click around the player between route clicks.
         active=self.scheduler.executor.active_command
@@ -600,6 +994,20 @@ class NonYoloAgent(VisualAgent):
         paused=self._paused
         text=message.lower()
         requested=''.join(text.split()).rstrip('.!?')
+        if requested in {'공격스킬','반복스킬','/skills','/repeat-skills'}:
+            result=await self.handle_control('/hunt')
+            if result:
+                self._manual_skill_mode=True
+                self._stationary_skill_mode=requested in {'반복스킬','/repeat-skills'}
+                if self._stationary_skill_mode:
+                    self._repeat_skills_hunting=False
+                    self._navigation_escape=None;self._wall_probe_pending=False
+                    task=getattr(self,'_post_movement_dodge_task',None)
+                    if task is not None and not task.done():task.cancel()
+                    await self.scheduler.submit_emergency(command('STOP',source='REPEAT_SKILLS',epoch=self._epoch))
+                self._movement_hunt_target=None
+                self.emit_web_event('control_mode',mode='skills',message='등록된 활성 공격스킬 · 설정 간격으로 반복')
+            return result
         if requested in {'/replan','예정진행방향변경','예정진행방향바꿔줘'}:
             self._epoch+=1
             self._next_navigation_plan=None;self._blocked_goal_sample=None
@@ -610,8 +1018,17 @@ class NonYoloAgent(VisualAgent):
             self.emit_web_event('control',action='replan')
             return True
         corridor_move=requested in {'/move','이동','이동해','이동해줘','통로중앙이동','통로중앙으로이동해'}
-        route_start=corridor_move or self.profile.name=='diablo4' and requested in {'/hunt','hunt','사냥시작','사냥시작해','사냥시작해줘','자동사냥','자동사냥시작','자동사냥해줘'}
+        hunt_start=requested in {'/hunt','hunt','사냥시작','사냥시작해','사냥시작해줘',
+                                '자동사냥','자동사냥시작','자동사냥시작해','자동사냥시작해줘',
+                                '자동사냥해','자동사냥해줘','사냥해','사냥해줘','사냥을해줘'}
+        route_start=corridor_move or hunt_start
         if route_start:
+            self._stationary_skill_mode=False
+            self._repeat_skills_hunting=hunt_start
+            self._manual_skill_pending_at=None;self._manual_skill_move_required=False
+            self._manual_skill_mode=False
+            self._movement_hunt_target=None;self._movement_target_missing=None
+            self._movement_hunt_requested=not corridor_move
             self._move_only=corridor_move
             if corridor_move:
                 self.combat_guard.reset()
@@ -628,7 +1045,7 @@ class NonYoloAgent(VisualAgent):
             self._hunt_preferred_direction=None
             self.click_journey.reset()
             self.minimap_memory.resume()
-            if corridor_move:message='/hunt'
+            message='/hunt'
         hint=None
         if re.search(r'사냥.*(?:시작|해)|자동사냥|/hunt',text) and not re.search(r'중단|중지|그만|멈',text):
             x=1 if re.search(r'동쪽|오른쪽|동북|북동|동남|남동',text) else -1 if re.search(r'서쪽|왼쪽|서북|북서|서남|남서',text) else 0
@@ -637,6 +1054,10 @@ class NonYoloAgent(VisualAgent):
         compact=''.join(message.lower().split()).rstrip('.!?')
         stopping=compact in {'/stop','/pause','/quit','멈춰','정지','중지','stop','사냥중단','사냥중단해','사냥중지','사냥중지해','사냥멈춰','사냥그만','사냥그만해'}
         if stopping:
+            self._repeat_skills_hunting=False
+            self._manual_skill_mode=False
+            self._movement_hunt_target=None;self._movement_target_missing=None
+            self._movement_hunt_requested=False
             if not self._focus_stopping:
                 self._manual_control=True
                 self._follow_orange_route=False
@@ -655,6 +1076,10 @@ class NonYoloAgent(VisualAgent):
             for client in {id(self.vl):self.vl,id(self.chat_vl):self.chat_vl}.values():
                 if callable(getattr(type(client),'resume_requests',None)):client.resume_requests()
             self._scene_scan_status='idle'
+            if hunt_start:
+                self._movement_hunt_requested=True
+                self._move_only=False
+                self.emit_web_event('control_mode',mode='move_and_attack',message='사냥 시작 · 이동 + 공격')
         if result and not stopping and not corridor_move and compact not in {'/status'}:self._move_only=False
         if hint is not None:self._hunt_preferred_direction=hint
         elif str(message).strip()=='/hunt' and not hasattr(self,'_hunt_preferred_direction'):self._hunt_preferred_direction=None
@@ -898,7 +1323,11 @@ class NonYoloAgent(VisualAgent):
         bars+=self.combat_feedback.tracked_black_bars(frame,config)
         bars=list(dict.fromkeys(bars))
         with self.scene.lock:
-            for o in self.scene.objects:self.resolver.protect_named_ally(o)
+            for o in self.scene.objects:
+                # Movement mode does not run the tracking worker that normally
+                # clears these flags. Never reuse a previous frame's enemy bar.
+                o.enemy_bar_confirmed=False;o.enemy_health_valid=False
+                self.resolver.protect_named_ally(o)
             objects=self.scene.seed_enemy_bars(frame,bars)
             self.combat_feedback.confirm_red_bars(frame,objects,config,bars=bars)
             return objects
@@ -932,6 +1361,8 @@ class NonYoloAgent(VisualAgent):
             self._scene_scan_status='stopped' if self._qwen_stopped else 'idle'
 
     def stop(self):
+        task=getattr(self,'_post_movement_dodge_task',None)
+        if task is not None and not task.done():task.cancel()
         task=getattr(self,'_obstacle_scan_task',None)
         if task and not task.done():task.cancel()
         self._epoch+=1
@@ -1034,20 +1465,53 @@ class NonYoloAgent(VisualAgent):
         return self._latest_frame is not None and self.scene.unchanged_play(self._latest_frame,time.monotonic())
 
     def can_execute(self,c):
-        if self._move_only and c.action_type in {'ATTACK','USE_SKILL','TAKE','INTERACT'}:return False
+        self._input_block_reason=None
+        def reject(reason):
+            self._input_block_reason=reason
+            return False
+        movement_test=getattr(self,'movement_test_mode',False)
+        if getattr(self,'_stationary_skill_mode',False) and c.action_type in {'MOVE','DODGE','ATTACK'}:
+            return reject('반복 스킬 · 스킬만 실행')
+        if c.action_type=='ATTACK' and not self._movement_hunt_enabled():return reject('사냥 시작 시 기본 공격 활성화')
+        manual_skill=(c.action_type=='USE_SKILL' and c.source=='MANUAL_SKILL'
+                      and (getattr(self,'_manual_skill_mode',False) or getattr(self,'_repeat_skills_hunting',False)))
+        if c.source=='NAVIGATION_ESCAPE' and not self._docs['input.json'].get('movement_skill',{}).get('enabled',False):
+            return reject('이동 스킬 미등록 또는 비활성')
+        if movement_test:
+            if c.action_type=='STOP':return True
+            escape=c.action_type=='DODGE' and c.source in {'NAVIGATION_ESCAPE','NAVIGATION_DODGE'}
+            hunting=(c.action_type in {'ATTACK','USE_SKILL'} and c.source=='MOVEMENT_HUNT'
+                     and self._movement_hunt_enabled())
+            if c.action_type!='MOVE' and not escape and not hunting and not manual_skill:return reject('이동 테스트 모드 · 이동 외 입력 중지')
+            if hunting and (time.monotonic()-self._yolo_at>.75 or not any(
+                    o.track_id==c.track_id and o.enemy_bar_confirmed and o.relation=='hostile'
+                    and self.combat_guard.permits(o.track_id) and not self.combat_guard.is_blocked(o)
+                    for o in self._objects)):
+                return reject('공격 대상 최신 확인 대기')
+            if self._paused or self._processing_halted or c.decision_epoch!=self._epoch or not self._fresh() or not self._foreground():
+                return reject('이동 테스트 · 중단/포커스/캡처/명령 확인 필요')
+        if self._move_only and not manual_skill and c.action_type in {'ATTACK','USE_SKILL','TAKE','INTERACT'}:return False
         if self.profile.name=='diablo4' and c.action_type=='USE_SKILL':
             key=next((s['key'] for s in self._docs['input.json'].get('attack_skills',[]) if s['id']==c.skill_id),None) if c.skill_id else self._docs['input.json']['bindings']['USE_SKILL']
-            if key==self._docs['input.json']['bindings']['CAST_BUFF']:return False
+            if not c.skill_id and key==self._docs['input.json']['bindings']['CAST_BUFF']:return False
         if c.action_type=='CAST_BUFF' and (not self.buff_monitor.references or not self.buff_monitor.pending_recast or time.monotonic()-self._buff_at>=1):return False
         if c.action_type in self._docs['input.json'].get('disabled_actions',[]):return False
+        if c.skill_id:
+            skill=next((s for s in self._docs['input.json'].get('attack_skills',[]) if s['id']==c.skill_id and s.get('enabled')),None)
+            if skill is None:return False
+            checked=replace(c,cooldown=skill['cooldown_ms']/1000)
+            if not self.scheduler._is_cooldown_ready(checked):return reject('공격스킬 사용 간격 대기')
+        if manual_skill:
+            return (not self._paused and not self._processing_halted and c.decision_epoch==self._epoch
+                    and self._latest_frame is not None and time.monotonic()-self._capture_at<1 and self._foreground())
         zones=self._world_click_exclusions()
         nav=self._docs['navigation.json']
         if (c.action_type in {'MOVE','DODGE'} and c is not self._hud_probe_command
-                and c.source!='HP_RETREAT' and (not nav['minimap']['enabled'] or not self._local_map_current(nav))):return False
+                and c.source!='HP_RETREAT' and (not nav['minimap']['enabled'] or not self._local_map_current(nav))):return reject('미니맵 미확인: '+self.minimap_memory.snapshot()['reason'])
         if (c.action_type in {'MOVE','DODGE'} and c.direction is not None and c.target is None and c is not self._hud_probe_command
                 and c.source!='HP_RETREAT' and self._docs['navigation.json']['minimap'].get('mapping',{}).get('enabled',False)
                 and not self.minimap_memory.allows(c.direction)):return False
-        if c.action_type in {'MOVE','DODGE'} and c.target is not None and c is not self._hud_probe_command and c.source!='HP_RETREAT':
+        if c.action_type in {'MOVE','DODGE'} and c.target is not None and c is not self._hud_probe_command and c.source not in {'HP_RETREAT','NAVIGATION_ESCAPE','NAVIGATION_DODGE'}:
             h,w=self._latest_frame.shape[:2];ox,oy=self._world_player_origin()
             dx,dy=(c.target[0]-ox)*w,(c.target[1]-oy)*h
             length=math.hypot(dx,dy)
@@ -1057,7 +1521,7 @@ class NonYoloAgent(VisualAgent):
             if mapped:
                 memory=self.minimap_memory
                 with memory.lock:
-                    if not memory.snapshot()['valid'] or memory.grid is None or memory.mask is None:return False
+                    if not memory.snapshot()['valid'] or memory.grid is None or memory.mask is None:return reject('전송 직전 지도 갱신/위치 연결 실패')
                     approved=cv2.resize(memory.grid*255,(memory.grid.shape[1]*memory.CELL,memory.grid.shape[0]*memory.CELL),interpolation=cv2.INTER_NEAREST)
                     mask=np.zeros_like(memory.mask)
                     mask[:approved.shape[0],:approved.shape[1]]=approved
@@ -1067,8 +1531,8 @@ class NonYoloAgent(VisualAgent):
             _,top,_,bottom=game_viewport(self._latest_frame)
             scale=m.get('mapping',{}).get('screen_pixels_per_map_pixel',12)*(bottom-top)/1080*(1 if mapped else 192/mask.shape[1])
             m['lookahead']=length/scale/mask.shape[1];m['pixel_directions']=True
-            if not self.navigator._map_clear((dx/length,dy/length),mask,m):return False
-        if c.action_type in {'MOVE','DODGE','ATTACK','USE_SKILL','TAKE','INTERACT'} and c.target is not None and not point_outside(c.target,zones):return False
+            if not self.navigator._map_clear((dx/length,dy/length),mask,m):return reject('클릭까지의 미니맵 통로 차단')
+        if c.action_type in {'MOVE','DODGE','ATTACK','USE_SKILL','TAKE','INTERACT'} and c.target is not None and not point_outside(c.target,zones):return reject('클릭 위치가 HUD/캐릭터 제외 영역 안에 있음')
         if c.action_type in {'MOVE','DODGE','ATTACK','USE_SKILL','TAKE','INTERACT'} and c is not self._hud_probe_command:
             movement=c.action_type in {'MOVE','DODGE'}
             fresh_bar=self.profile.name=='diablo4' and any(o.track_id==c.track_id and o.enemy_bar_confirmed for o in self._objects)
@@ -1077,11 +1541,19 @@ class NonYoloAgent(VisualAgent):
             if c.action_type in {'TAKE','INTERACT'} and not self._movement_scene_current():
                 self.scene.force=True
                 return False
-            if c.action_type=='MOVE' and c.target is not None and not self.navigator.click_is_clear(c.target,self._objects,self._latest_frame.shape,zones,self._world_player_origin(),min(.035,18/self._latest_frame.shape[1]) if nav['minimap']['enabled'] else .08):return False
+            if c.action_type=='MOVE' and c.target is not None and not self.navigator.click_is_clear(c.target,self._objects,self._latest_frame.shape,zones,self._world_player_origin(),min(.035,18/self._latest_frame.shape[1]) if nav['minimap']['enabled'] else .08):
+                self.navigator.last_block_reason='클릭 위치가 객체와 겹치거나 캐릭터에 너무 가까움'
+                self._navigation_click_failed(c)
+                return reject(self.navigator.last_block_reason)
             if c.action_type=='ATTACK' or c.skill_id:
                 target=next((o for o in self._objects if o.track_id==c.track_id),None)
                 if self.profile.name=='diablo4' and (target is None or not target.enemy_bar_confirmed):return False
-        return super().can_execute(c)
+        if movement_test:return True
+        allowed=super().can_execute(c)
+        if not allowed:
+            reason=('일시정지' if self._paused else '처리 중단' if self._processing_halted else 'HUD 재측정' if self._hud_rechecking else '이전 명령' if c.decision_epoch!=self._epoch else '화면/HP 측정 지연' if not self._fresh() else '게임 창 비활성' if not self._foreground() else 'HP/객체/대상 기본 검증 실패')
+            return reject(reason)
+        return True
 
     def _log_movement_status(self,reason,now=None):
         now=time.monotonic() if now is None else now
@@ -1098,6 +1570,15 @@ class NonYoloAgent(VisualAgent):
             self._last_move_block_reason=reason
 
     def _movement_block_reason(self):
+        if getattr(self,'movement_test_mode',False):
+            if self._paused:return '이동 테스트 일시정지'
+            if self._processing_halted:return '이동 테스트 처리 중단 · 시작/재개 필요'
+            if not self._foreground():return '게임 창 활성화 대기'
+            if not self._fresh():return '최신 게임 캡처 대기'
+            if not self._local_map_current(self._docs['navigation.json']):return '미니맵 통로 확인 대기 · '+self.minimap_memory.reason
+            requested=self._last_requested_command
+            if requested and requested.reason=='PATH_BLOCKED':return '이동 테스트 · '+(getattr(self.navigator,'last_block_reason',None) or '클릭 경로 재검사')
+            return None
         if self._manual_control:return '수동 조작 · 자동 입력 해제 · 사냥 시작/재개로 자동사냥 복귀'
         if self._focus_paused:return '게임 창 비활성 · 즉시 중단 · 활성화 시 자동사냥 시작/재개'
         if self._processing_halted:return self._halt_reason or '처리 중단'
@@ -1127,11 +1608,15 @@ class NonYoloAgent(VisualAgent):
         if requested and requested.reason=='ORANGE_GUIDE_DISCONNECTED':return '새 목표 대기 · 플레이어 주변 안내선 연결 확인 중'
         if requested and requested.reason=='ORANGE_ROUTE_NOT_FOUND':return '현재 목표 통로 차단 · 미니맵 경로 재확인 중'
         if requested and requested.reason=='NO_CENTER_PATH':return '연결된 중앙 통로 없음 · 벽 방향 반복 클릭 보류'
-        if requested and requested.reason=='PATH_BLOCKED':return '계획 경로 클릭 검증 실패 · 새 미니맵 측정 대기'
+        if requested and requested.reason=='PATH_BLOCKED':return '계획 경로 클릭 검증 실패 · '+(getattr(self.navigator,'last_block_reason',None) or '새 미니맵 측정 대기')
         return None
 
     def web_snapshot(self):
         result=super().web_snapshot()
+        if getattr(self,'movement_test_mode',False):
+            result['attack'].update(reason='이동 중 사냥 · 확인된 적 공격, 적이 없으면 이동' if self._movement_hunt_enabled()
+                                   else '이동 모드 · 사냥 시작 입력 시 공격 활성화')
+            result['movement_test_mode']=True
         result['recognition_mode']='non_YOLO'
         result['control_mode']='manual' if self._manual_control else 'move_only' if self._move_only and self._hunt_active else 'auto_hunt' if self._hunt_active else 'paused'
         result['gameplay_spec']=dict(self._profile_gameplay_info)
@@ -1155,9 +1640,7 @@ class NonYoloAgent(VisualAgent):
         with self.minimap_memory.lock:
             memory=self.minimap_memory
             state=memory.snapshot()
-            state['planned_target']=None
-            if state['valid'] and memory.goal is not None and memory.route and memory.mask is not None:
-                state['planned_target']=((memory.goal-memory.origin)/np.array([memory.mask.shape[1],memory.mask.shape[0]])).tolist()
+            state['planned_target']=memory.planned_target()
             state['journey']=self.click_journey.snapshot(origin=memory.origin,shape=memory.mask.shape if memory.mask is not None else (144,192),segment=memory.segment,valid=state['valid'],now=time.monotonic())
             state['last_goal_release']=self.click_journey.last_release
             state['goal_release_history']=list(self.click_journey.history)
@@ -1168,12 +1651,12 @@ class NonYoloAgent(VisualAgent):
             state['goal_locked']=bool(self.click_journey.current is not None
                                       and journey and journey['status'] in self.click_journey.MOVING_STATES and journey['map_target'] is not None)
             retained=bool(journey and self.click_journey.last_release in {'stalled','waypoint_arrived','step_progress','step_refresh'} and journey['destination_map_target'] is not None)
-            if state['goal_locked'] or retained:
+            if (state['goal_locked'] or retained) and not getattr(self,'movement_test_mode',False):
                 state['planned_target']=journey['destination_map_target']
             state['destination_target']=state['planned_target']
             state['waypoint_target']=list(state['route'][1]) if state['valid'] and len(state['route'])>1 else None
-            state['planned_target']=state['destination_target'] if state['waypoint_target'] is not None else None
-            state['destination_locked']=bool(state['goal_locked'] or retained)
+            state['planned_target']=state['destination_target']
+            state['destination_locked']=bool(memory.goal is not None or state['goal_locked'] or retained)
             state['goal_locked']=state['destination_locked']
             result['navigation']['mapping']=state
         result['navigation']['perception_mode']='minimap_travel_world_combat'

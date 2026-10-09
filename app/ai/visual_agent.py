@@ -1408,6 +1408,19 @@ class VisualAgent:
             if not self._focus_work_allowed():
                 await asyncio.sleep(.1);continue
             now = time.monotonic()
+            if getattr(self,'_manual_skill_mode',False) or getattr(self,'_repeat_skills_hunting',False):
+                if getattr(self,'_stationary_skill_mode',False):
+                    if (not self._paused and not self._processing_halted and self._latest_frame is not None
+                            and now-self._capture_at<1 and self._foreground()):
+                        skill=self._hunt_attack_rotation(command('ATTACK',source='MANUAL_SKILL',epoch=self._epoch))
+                        if skill is not None:await self.scheduler.submit(skill)
+                    await asyncio.sleep(.05)
+                    continue
+                if (not self._paused and not self._processing_halted and self._latest_frame is not None
+                        and now-self._capture_at<1 and self._foreground()):
+                    if await self._manual_skill_tick():
+                        await asyncio.sleep(.05)
+                        continue
             if self._processing_halted or self._hud_rechecking or self._hud_probe_command is not None:
                 await asyncio.sleep(0.1)
                 continue
@@ -1452,6 +1465,8 @@ class VisualAgent:
                     preferred_track_id=self._attack_track_id,
                 )
                 defer_optional=getattr(self,'_defer_optional_actions',None)
+                if getattr(self,'_manual_skill_mode',False):
+                    c=command('MOVE',source='HUNT_EXPLORE',direction=self.minimap_memory.last_direction or (1.,0.),epoch=self._epoch)
                 if defer_optional and defer_optional(c):
                     await asyncio.sleep(self.reaction_interval)
                     continue
@@ -1488,8 +1503,7 @@ class VisualAgent:
                         c=command("STOP",source="COMBAT_GUARD",reason="전투 대상 재판정/시간 제한",epoch=self._epoch)
                 if c.action_type == "ATTACK":
                     self._attack_track_id = c.track_id
-                    if self._docs['input.json'].get('basic_attack_mode') == 'hold_right':
-                        c = replace(c, maintain_attack=True,expires_at=now+1.5)
+                    c=replace(c,maintain_attack=False)
                     skills = self._docs["input.json"].get("attack_skills", [])
                     for skill in sorted(skills, key=lambda s: self.scheduler._last_execution.get(("USE_SKILL", s["id"]), -1e9)):
                         if not skill["enabled"] or 'USE_SKILL' in self._docs['input.json'].get('disabled_actions',[]):
@@ -1504,8 +1518,15 @@ class VisualAgent:
                         if self.scheduler._is_cooldown_ready(candidate):
                             c = candidate
                             break
+                    if c.action_type=='ATTACK' and not getattr(self,'_repeat_skills_hunting',False):
+                        c=command('STOP',source='COMBAT',reason='COMBAT_COOLDOWN',epoch=self._epoch)
                 if c.action_type in {"MOVE", "DODGE"} and c.direction is not None:
                     continue_navigation=getattr(self,'_continue_navigation',None)
+                    navigation_escape=(getattr(self,'_try_navigation_escape',None)
+                                       if c.action_type=='MOVE' and c.source in {'HUNT_EXPLORE','MINIMAP_QWEN','USER_COMMAND'} else None)
+                    if navigation_escape and await navigation_escape():
+                        await asyncio.sleep(self.reaction_interval)
+                        continue
                     buff_due=('CAST_BUFF' not in self._docs['input.json'].get('disabled_actions',[])
                               and self.buff_monitor.pending_recast and now-self._buff_at<1)
                     if continue_navigation and continue_navigation(c):
@@ -1513,6 +1534,9 @@ class VisualAgent:
                         if buff_due:
                             candidate=command('CAST_BUFF',source='BUFF_EXPIRED',reason='확인된 버프 아이콘 소실 · 1회 재사용',epoch=self._epoch)
                             if self.scheduler._is_cooldown_ready(candidate):await self.scheduler.submit(candidate)
+                        await asyncio.sleep(self.reaction_interval)
+                        continue
+                    if navigation_escape and await navigation_escape():
                         await asyncio.sleep(self.reaction_interval)
                         continue
                     nav_settings = copy.deepcopy(self._docs["navigation.json"])
@@ -1535,6 +1559,8 @@ class VisualAgent:
                         self.navigation_monitor.failed_direction if now-self.navigation_monitor.last_recovery<3 else None,
                     ) if c.direction is not None else None
                     if step is None:
+                        failed=getattr(self,'_navigation_click_failed',None)
+                        if failed:failed(c)
                         if not self._path_blocked_since:
                             self._path_blocked_since = now
                         if c.action_type!='STOP':c = command("STOP", reason="PATH_BLOCKED", epoch=self._epoch)
@@ -1855,6 +1881,12 @@ class VisualAgent:
             self._emergency_loop,
             self._combat_recheck_loop,
         ]
+        if getattr(self,'movement_test_mode',False):
+            disabled={'_hud_loop','_yolo_loop','_calibration_loop','_learning_loop',
+                      '_emergency_loop','_combat_recheck_loop','_navigation_replan_loop'}
+            workers=[self._idle_sensor_loop if worker.__name__ in disabled else
+                     self._movement_test_loop if worker.__name__=='_action_loop' else worker
+                     for worker in workers]
         if self._console_enabled:
             workers += [self._console_loop]
             self._start_console()

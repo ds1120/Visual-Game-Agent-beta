@@ -124,7 +124,8 @@ class ActionScheduler:
 
     def _is_cooldown_ready(self, command):
         now = time.monotonic()
-        if (command.action_type == "ATTACK" or command.skill_id) and now - self._last_execution.get("combat_input", -1e9) < 0.15:
+        timed_skill=bool(command.skill_id and command.source in {'MANUAL_SKILL','MOVEMENT_HUNT','ATTACK_ROTATION'})
+        if not timed_skill and (command.action_type == "ATTACK" or command.skill_id) and now - self._last_execution.get("combat_input", -1e9) < 0.15:
             return False
         return now - self._last_execution.get(self.cooldown_key(command), -1e9) >= command.cooldown
 

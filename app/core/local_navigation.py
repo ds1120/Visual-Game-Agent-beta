@@ -68,6 +68,7 @@ class LocalNavigator:
         return True
 
     def choose(self, direction, objects, shape, settings, mask=None, avoid_direction=None):
+        self.last_block_reason=None
         if settings.get('strict_route') and settings.get('route_mask') is not None:
             mask=settings['route_mask']
         dx, dy = direction
@@ -107,8 +108,8 @@ class LocalNavigator:
             distance=settings['step_fraction'] if settings.get('map_screen_scale') or settings.get('strict_route') else max(.08,settings['step_fraction'])
             # Minimap vectors are pixel directions. Normalized X/Y scaling otherwise changes the heading on wide screens.
             scale_y=w/h if settings.get('projection')=='isotropic' else 1
-            # Travel clicks must clear the character's near zone in screen
-            # pixels. Extend a tiny waypoint only along a verified clear ray.
+            # Keep strict-route clicks inside the verified distance. Reject
+            # tiny clicks rather than extending them beyond a bend or wall.
             minimum_pixels=settings.get('minimum_move_pixels',0)
             pixels_per_length=math.hypot(vx*w,vy*scale_y*h)
             minimum_length=minimum_pixels/max(pixels_per_length,1)
@@ -116,15 +117,23 @@ class LocalNavigator:
             end=None
             for fraction in ((1,.8,.6,.4,.25,.125) if settings.get('strict_route') else (1,)):
                 length=distance*fraction if settings.get('map_screen_scale') or settings.get('strict_route') else max(.08,distance*fraction)
-                if length*pixels_per_length<minimum_pixels-1e-6:continue
+                if length*pixels_per_length<minimum_pixels-1e-6:
+                    if self.last_block_reason is None:self.last_block_reason='검증 구간이 최소 클릭 거리보다 짧음'
+                    continue
                 candidate=(origin[0]+vx*length,origin[1]+vy*length*scale_y)
                 if self.click_is_clear(candidate,objects,shape,settings.get('excluded_regions',()),origin,settings.get('minimum_click_distance',.08)):
                     m=dict(settings['minimap'])
                     if settings.get('map_screen_scale') and mask is not None:
                         m['lookahead']=length*w/settings['map_screen_scale']/mask.shape[1]
                         allowed=settings['minimap'].get('lookahead',.18) if settings.get('strict_route') else max(settings['minimap'].get('lookahead',.18),minimum_length*w/settings['map_screen_scale']/mask.shape[1])
-                        if m['lookahead']>allowed+1e-6:continue
-                    if self._map_clear((vx,vy),mask,m):end=candidate;break
+                        if m['lookahead']>allowed+1e-6:
+                            self.last_block_reason='클릭 거리가 검증 구간을 초과함'
+                            continue
+                    if self._map_clear((vx,vy),mask,m):
+                        self.last_block_reason=None
+                        end=candidate;break
+                    self.last_block_reason='지도에서 클릭까지의 통로가 차단됨'
+                else:self.last_block_reason='클릭 종점이 HUD·캐릭터·객체 영역과 겹침'
             if end is None:continue
             blocked = False
             for t in np.linspace(0.15, 1, 10):

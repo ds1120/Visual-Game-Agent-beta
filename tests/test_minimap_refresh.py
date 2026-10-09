@@ -38,6 +38,19 @@ class MinimapRefreshTests(unittest.TestCase):
         self.assertFalse(self.memory.snapshot(now=10.1)['valid'])
         self.assertEqual(self.memory.route, [])
 
+    def test_registration_failure_retains_history_for_thirty_seconds(self):
+        self.update(10)
+        segment=self.memory.segment
+        visits=self.memory.visits.copy()
+        self.frame[:]=100
+        self.assertIsNone(self.update(10.1))
+        self.assertIsNone(self.update(20))
+        self.assertEqual(self.memory.segment,segment)
+        self.assertEqual(self.memory.visits,visits)
+        self.assertIsNotNone(self.update(40.2))
+        self.assertGreater(self.memory.segment,segment)
+        self.assertTrue(self.memory.archives)
+
     def test_invalid_terrain_does_not_claim_partial_validity(self):
         self.update(10)
         self.assertIsNone(self.update(10.1, valid=False))
@@ -108,6 +121,87 @@ class MinimapRefreshTests(unittest.TestCase):
         self.assertIn(self.memory._key(np.array([102.,96.])),self.memory.visits)
         self.assertGreaterEqual(self.memory.recorded_position[0],101.5)
 
+    def test_edge_priority_precedes_unvisited_interior(self):
+        self.update(10)
+        for y,x in np.ndindex(self.memory.grid.shape):
+            if min(x,y,47-x,47-y)<3:
+                self.memory.visits[self.memory._key((np.array([x,y])+.5)*4)]=2
+        self.assertIsNotNone(self.memory.suggest((1,0),explore=True,now=10.1))
+        x,y=np.floor(self.memory.goal/4).astype(int)
+        self.assertLess(min(x,y,47-x,47-y),3)
+
+    def test_recent_measured_trace_is_avoided_when_green_cells_are_equal(self):
+        self.update(10)
+        self.memory.visits.clear()
+        self.memory.breadcrumbs.clear()
+        for y in range(24):self.memory.breadcrumbs.append(np.array([190.,(y+.5)*4]))
+        self.memory.direction_priority=True
+        self.assertIsNotNone(self.memory.suggest((1,0),explore=True,now=10.1))
+        recent={self.memory._key(point) for point in self.memory.breadcrumbs}
+        self.assertNotIn(self.memory._key(self.memory.goal),recent)
+
+    def test_clear_current_heading_wins_over_unvisited_return_route(self):
+        self.update(10)
+        self.memory.last_direction=(1.,0.)
+        for y,x in np.ndindex(self.memory.grid.shape):
+            if x>=24:self.memory.visits[self.memory._key((np.array([x,y])+.5)*4)]=4
+        self.assertIsNotNone(self.memory.suggest((-1,0),explore=True,now=10.1))
+        self.assertGreater(self.memory.goal[0],150)
+        self.assertGreater(self.memory.last_direction[0],.98)
+
+    def test_obstacle_allows_change_from_current_heading(self):
+        self.mask[:]=0
+        self.mask[88:172,88:108]=255
+        self.update(10)
+        self.memory.last_direction=(1.,0.)
+        self.assertIsNotNone(self.memory.suggest((1,0),explore=True,now=10.1))
+        self.assertGreater(self.memory.last_direction[1],.8)
+
+    def test_locked_heading_does_not_change_for_new_frontier_or_scrolling(self):
+        self.update(10)
+        self.memory.last_direction=(1.,0.)
+        self.memory.lock_current_heading=True
+        destination=None
+        for i in range(1,5):
+            self.update(10+i*.05,shift=np.array([-2.,1.]))
+            result=self.memory.suggest((0,-1),explore=True,now=10+i*.05)
+            self.assertIsNotNone(result)
+            self.assertGreater(result[0][0],.98)
+            if destination is None:destination=self.memory.goal.copy()
+            np.testing.assert_allclose(self.memory.goal,destination)
+
+    def test_locked_heading_changes_only_when_forward_corridor_ends(self):
+        self.mask[:]=0
+        self.mask[88:172,88:100]=255
+        self.update(10)
+        self.memory.last_direction=(1.,0.)
+        self.memory.lock_current_heading=True
+        result=self.memory.suggest((1,0),explore=True,now=10.1)
+        self.assertIsNotNone(result)
+        self.assertGreater(result[0][1],.8)
+
+    def test_locked_destination_is_not_replaced_as_map_scrolls(self):
+        self.update(10)
+        self.memory.last_direction=(1.,0.)
+        self.memory.lock_current_heading=True
+        self.assertIsNotNone(self.memory.suggest((1,0),explore=True,now=10.01))
+        destination=self.memory.goal.copy()
+        for i in range(1,5):
+            self.update(10+i*.05,shift=np.array([-2.,0.]))
+            self.assertIsNotNone(self.memory.suggest((0,-1),explore=True,now=10+i*.05))
+            np.testing.assert_allclose(self.memory.goal,destination)
+
+    def test_new_goal_avoids_visited_direction_even_if_previous_heading_is_clear(self):
+        self.update(10)
+        self.memory.last_direction=(1.,0.)
+        self.memory.lock_current_heading=True
+        self.memory.prefer_unvisited=True
+        for y,x in np.ndindex(self.memory.grid.shape):
+            if x>=24:self.memory.visits[self.memory._key((np.array([x,y])+.5)*4)]=5
+        self.assertIsNotNone(self.memory.suggest((1,0),explore=True,now=10.1))
+        self.assertLess(self.memory.goal[0],96)
+        self.assertNotIn(self.memory._key(self.memory.goal),self.memory.visits)
+
     def test_distant_candidates_survive_rejected_shortcut(self):
         from app.core.minimap_memory import shortcut_cost
         self.update(10)
@@ -118,6 +212,65 @@ class MinimapRefreshTests(unittest.TestCase):
                                        target_world=np.array([174.,98.]))
         self.assertIsNotNone(result)
         np.testing.assert_allclose(self.memory.route[1],[174/192,98/192])
+
+    def test_stuck_measurement_keeps_locked_destination_for_wall_probe(self):
+        self.update(10)
+        self.memory.lock_current_heading=True
+        self.memory.goal=np.array([174.,98.])
+        self.memory.pending.append((10.,self.memory.position.copy(),(1.,0.)))
+        self.update(12.1,shift=np.zeros(2))
+        self.assertTrue(self.memory.stuck)
+        np.testing.assert_allclose(self.memory.goal,[174.,98.])
+        self.assertEqual(self.memory.recovery_stage,'none')
+
+    def test_player_near_floor_recovers_after_two_fresh_maps(self):
+        self.mask[:,96:]=0
+        self.assertIsNone(self.update(10))
+        segment=self.memory.segment
+        self.memory.goal=np.array([30.,98.])
+        self.assertIsNotNone(self.update(10.1,shift=np.zeros(2)))
+        self.assertTrue(self.memory.valid)
+        self.assertLess(self.memory.player[0],.5)
+        self.assertEqual(self.memory.segment,segment)
+        np.testing.assert_allclose(self.memory.goal,[30.,98.])
+        self.assertFalse(self.memory.grid[24,24])
+        self.assertIsNotNone(self.memory.suggest((-1,0),now=10.1))
+
+    def test_player_far_from_floor_is_not_projected_through_wall(self):
+        self.mask[:,80:]=0
+        self.assertIsNone(self.update(10))
+        self.assertIsNone(self.update(10.1,shift=np.zeros(2)))
+        self.assertFalse(self.memory.valid)
+
+    def test_destination_display_survives_route_loss_after_skill(self):
+        self.update(10)
+        self.memory.goal=np.array([174.,98.])
+        expected=self.memory.planned_target()
+        self.memory.route=[]
+        self.memory.valid=False
+        self.assertEqual(self.memory.planned_target(),expected)
+        self.memory.origin+=np.array([4.,0.])
+        self.assertLess(self.memory.planned_target()[0],expected[0])
+        self.memory.request_replan()
+        retained=self.memory.planned_target()
+        self.assertIsNotNone(retained)
+        self.assertIsNone(self.memory.goal)
+        self.update(10.1,valid=False)
+        self.assertEqual(self.memory.planned_target(),retained)
+        self.update(10.2,shift=np.zeros(2))
+        self.assertIsNotNone(self.memory.suggest((-1,0),now=10.2))
+        self.assertIsNone(self.memory.replan_goal)
+        self.assertIsNotNone(self.memory.planned_target())
+
+    def test_new_goal_avoids_recent_completed_destination(self):
+        self.update(10)
+        self.memory.prefer_unvisited=True
+        self.memory.suggest((1,0),explore=True,now=10.1)
+        previous=self.memory.goal.copy()
+        self.memory.completed_goals.append(previous)
+        self.memory.goal=None
+        self.assertIsNotNone(self.memory.suggest((1,0),explore=True,now=10.2))
+        self.assertGreater(np.linalg.norm(self.memory.goal-previous),self.memory.CELL*3)
 
     def test_guide_destination_is_not_cut_to_32_pixels(self):
         from app.vision.orange_route import orange_route_target

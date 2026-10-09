@@ -52,6 +52,7 @@ INPUT_DEFAULT = {
     "attack_lost_grace_ms": 2000,
     "pointer_smoothing": True,
     "pointer_duration_ms": 120,
+    "movement_skill": {"enabled":False,"key":"SPACE"},
     "bindings": {
         "ATTACK": "mouse_left",
         "TAKE": "E",
@@ -346,6 +347,9 @@ def validate_settings(filename, data):
         ):
             raise ValueError("YOLO ROI 오류")
     elif filename == "input.json":
+        skill=data.get('movement_skill')
+        if skill is not None and (not isinstance(skill,dict) or type(skill.get('enabled')) is not bool or not key(skill.get('key'))):
+            raise ValueError('이동 스킬 enabled/key 설정 오류')
         disabled=data.get('disabled_actions',[])
         if not isinstance(disabled,list) or any(not isinstance(a,str) or a not in {'USE_SKILL','CAST_BUFF','DODGE','TAKE','INTERACT','ATTACK'} for a in disabled):raise ValueError('미확인 입력 차단 설정 오류')
         combat=data.get('combat',{})

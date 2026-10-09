@@ -9,6 +9,7 @@ class ClickJourney:
     KEEP_ACTIONS = {'CAST_BUFF','USE_POTION'}
     MOVING_STATES = {'moving','approaching'}
     feedback_steps = False
+    arrival_only = False
     STALL_SECONDS = 1.2
     REFRESH_SECONDS = .05
     PASSIVE_STOPS = {'PAUSED_OR_NO_FRESH_HUD','MINIMAP_REQUIRED','PATH_BLOCKED','ORANGE_ROUTE_NOT_FOUND','ORANGE_GUIDE_MISSING','ORANGE_GUIDE_DISCONNECTED','NO_CENTER_PATH','NO_KNOWN_TARGET'}
@@ -60,9 +61,20 @@ class ClickJourney:
         origin=r.get('destination_start',r['start'])
         requested=float(np.linalg.norm(r.get('destination',r['goal'])-origin))
         radius=max(4.,min(12.,requested*.15))
+        if self.arrival_only:radius=2.
+        destination=r.get('destination',r['goal'])
+        current=np.asarray(position)
+        vector=destination-origin
+        projection=float((current-origin)@vector)/(requested*requested) if requested>0 else 0
+        passed=projection>=1 and np.linalg.norm(current-(origin+projection*vector))<=radius
         return (sampled_at-r.get('destination_sent_at',r['sent_at'])>=.12
                 and np.linalg.norm(np.asarray(position)-origin)>=min(2.,requested*.5)
-                and np.linalg.norm(r.get('destination',r['goal'])-np.asarray(position))<=radius)
+                and (np.linalg.norm(destination-current)<=radius or passed))
+
+    def _destination_release_reason(self,position):
+        if not self.arrival_only:return 'near_goal'
+        destination=self.record.get('destination',self.record['goal'])
+        return 'arrived' if np.linalg.norm(destination-np.asarray(position))<=2 else 'destination_passed'
 
     def dispatched(self, command, *, position, segment, player_screen, shape, scale, rotation, destination=None):
         dx = (command.target[0]-player_screen[0])*shape[1]/scale
@@ -78,6 +90,11 @@ class ClickJourney:
 
     def on_input(self, command, status, now, position=None):
         if command.action_type in self.KEEP_ACTIONS:return
+        if command.source=='MANUAL_SKILL':
+            if status=='sent':
+                self.pending.clear()
+                self._release('step_refresh')
+            return
         if command.action_type=='STOP' and (command.reason in self.PASSIVE_STOPS or command.source in {'SEMANTIC_WAIT','COMBAT_TRACK_WAIT'}):return
         if command.action_type != 'MOVE' or command.source not in self.SOURCES:
             if status=='sent':
@@ -89,7 +106,7 @@ class ClickJourney:
             previous=self.record
             # An in-flight refresh may finish after the map already handed off.
             # Its late completion must not reopen the completed destination.
-            if (self.feedback_steps and previous is not None and self.last_release in {'near_goal','arrived'}
+            if (previous is not None and self.last_release in {'near_goal','arrived','destination_passed','map_goal_arrived'}
                     and previous['epoch']==candidate['epoch'] and previous['segment']==candidate['segment']
                     and np.allclose(candidate['destination'],previous.get('destination',previous['goal']))):return
             continuing=(previous is not None and self.last_release in {'stalled','waypoint_arrived','step_progress','step_refresh'}
@@ -158,7 +175,7 @@ class ClickJourney:
         requested=float(np.linalg.norm(r['goal']-r['start']))
         remaining=float(np.linalg.norm(current-r['goal']))
         r['status']='approaching' if remaining<=max(4,requested*.15) else 'moving'
-        if self._near_destination(current,now):self._release('near_goal',position=current)
+        if self._near_destination(current,now):self._release(self._destination_release_reason(current),position=current)
         elif self._arrived(current,now):self._release('arrived')
 
     def snapshot(self, *, origin, shape, segment, valid, now):
@@ -186,7 +203,7 @@ class ClickJourney:
                   and (self.current is not None or self.last_release in {'stalled','waypoint_arrived','step_progress','step_refresh'}))
         if (eligible and valid and mask is not None and sampled_at is not None
                 and now-sampled_at<.4 and self._near_destination(position,sampled_at)):
-            self._release('near_goal',position=position);return False
+            self._release(self._destination_release_reason(position),position=position);return False
         if self.current is None:return False
         saved_epoch,saved_segment,goal,started=self.current
         if saved_epoch==epoch and saved_segment!=segment and not valid:return True

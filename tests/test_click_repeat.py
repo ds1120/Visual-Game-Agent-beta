@@ -45,6 +45,48 @@ class ClickRepeatTests(unittest.TestCase):
         self.assertFalse(self.continues(epoch=2))
         self.assertEqual(self.journey.last_release,'epoch_changed')
 
+    def test_passing_destination_does_not_trigger_return_click(self):
+        self.journey.feedback_steps=True
+        self.assertFalse(self.journey.continues(epoch=1,segment=1,
+            position=np.array([190.,96.]),origin=np.zeros(2),
+            mask=np.full((192,192),255,np.uint8),valid=True,stuck=False,
+            now=10.3,sampled_at=10.3))
+        self.assertEqual(self.journey.last_release,'near_goal')
+
+    def test_arrival_only_keeps_destination_when_still_ten_pixels_away(self):
+        self.journey.feedback_steps=True
+        self.journey.arrival_only=True
+        self.assertFalse(self.journey._near_destination(np.array([164.,96.]),10.3))
+        self.assertTrue(self.journey._near_destination(np.array([173.,96.]),10.3))
+
+    def test_near_goal_handoff_releases_before_exact_arrival(self):
+        self.journey.feedback_steps=True
+        self.journey.arrival_only=False
+        self.assertFalse(self.journey.continues(epoch=1,segment=1,
+            position=np.array([164.,96.]),origin=np.zeros(2),
+            mask=np.full((192,192),255,np.uint8),valid=True,stuck=False,
+            now=10.3,sampled_at=10.3))
+        self.assertEqual(self.journey.last_release,'near_goal')
+
+    def test_arrival_only_refreshes_but_keeps_destination_ten_pixels_away(self):
+        self.journey.feedback_steps=True
+        self.journey.arrival_only=True
+        self.assertFalse(self.journey.continues(epoch=1,segment=1,
+            position=np.array([164.,96.]),origin=np.zeros(2),
+            mask=np.full((192,192),255,np.uint8),valid=True,stuck=False,
+            now=10.3,sampled_at=10.3))
+        self.assertNotIn(self.journey.last_release,{'near_goal','arrived','destination_passed'})
+        np.testing.assert_allclose(self.journey.record['destination'],[174.,96.])
+
+    def test_arrival_only_passed_destination_is_not_reported_as_intermediate_arrival(self):
+        self.journey.feedback_steps=True
+        self.journey.arrival_only=True
+        self.assertFalse(self.journey.continues(epoch=1,segment=1,
+            position=np.array([190.,96.]),origin=np.zeros(2),
+            mask=np.full((192,192),255,np.uint8),valid=True,stuck=False,
+            now=10.3,sampled_at=10.3))
+        self.assertEqual(self.journey.last_release,'destination_passed')
+
     def test_repeat_does_not_reset_stall_timer(self):
         self.assertFalse(self.continues())
         self.command.execute_at=2.
