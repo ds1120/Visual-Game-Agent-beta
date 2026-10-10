@@ -43,7 +43,7 @@ class HpFocusTimeoutTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_movement_test_disables_hp_watchdog_even_without_focus(self):
         bridge=self.bridge(False)
-        bridge.agent.movement_test_mode=True
+        bridge.agent.hud_mode=False
         await bridge._check_hp_connection(now=100)
         self.assertIsNone(bridge.hp_missing_since)
         bridge.agent._halt_processing.assert_not_awaited()

@@ -125,12 +125,10 @@ async def main() -> None:
     )
 
     agent.hud_mode=cfg.getboolean('AGENT','hud_mode',fallback=True)
-    # Keep the proven movement path identical with HUD reading on or off.
-    agent.movement_test_mode=True
+    agent.shared_movement_mode=True
     agent.minimap_memory.registration_reset_seconds=max(2,min(300,cfg.getfloat('AGENT','minimap_reset_wait_seconds',fallback=30)))
-    if agent.movement_test_mode:
-        agent._move_only=True
-        print('[MODE] 미니맵 이동 · HUD 읽기 ' + ('켜짐 (이동과 독립)' if agent.hud_mode else '꺼짐'))
+    agent._move_only=True
+    print('[MODE] 공통 핫키/이동/사냥 · HUD 읽기 ' + ('켜짐' if agent.hud_mode else '꺼짐'))
     bridge = None
     if args.web:
         from app.web.bridge import AgentBridge

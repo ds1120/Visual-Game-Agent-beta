@@ -7,6 +7,22 @@ from app.core.minimap_memory import MinimapMemory
 
 
 class MinimapRefreshTests(unittest.TestCase):
+    def test_wall_following_selects_safe_wall_band_instead_of_room_center(self):
+        self.mask[:12]=0;self.mask[-12:]=0;self.mask[:,:12]=0;self.mask[:,-12:]=0
+        self.update(10)
+        memory=self.memory
+        memory.follow_wall=True
+        memory.lock_current_heading=False
+        memory.prefer_unvisited=True
+        memory.follow_pin_route=False
+        memory.follow_orange_route=False
+        memory.preferred_clearance=2
+        plan=memory.suggest((1.,0.),now=10.1)
+        self.assertIsNotNone(plan)
+        x,y=np.floor((memory.goal-memory.origin)/memory.CELL).astype(int)
+        self.assertGreaterEqual(memory.clearance[y,x],1.5)
+        self.assertLessEqual(memory.clearance[y,x],3)
+
     def setUp(self):
         self.memory = MinimapMemory()
         self.frame = np.zeros((192, 192, 3), np.uint8)

@@ -351,7 +351,7 @@ class ScreenRouteGuideTests(unittest.TestCase):
         self.assertEqual((marker,dots),(True,False))
         self.assertEqual(guide['dots'],[])
 
-    def test_random_heading_is_stable_then_changes(self):
+    def test_random_heading_remains_stable_without_replanning(self):
         agent=MainAgent.__new__(MainAgent)
         with patch('app.ai.main_agent.random.uniform',side_effect=[0,np.pi/2]) as draw:
             with patch('app.ai.main_agent.time.monotonic',return_value=10):
@@ -359,8 +359,8 @@ class ScreenRouteGuideTests(unittest.TestCase):
             with patch('app.ai.main_agent.time.monotonic',return_value=11):
                 self.assertEqual(agent._random_move_heading(),(1.,0.))
             with patch('app.ai.main_agent.time.monotonic',return_value=12.1):
-                np.testing.assert_allclose(agent._random_move_heading(),(0.,1.),atol=1e-6)
-            self.assertEqual(draw.call_count,2)
+                np.testing.assert_allclose(agent._random_move_heading(),(1.,0.),atol=1e-6)
+            self.assertEqual(draw.call_count,1)
 
     def test_large_bright_effect_does_not_become_breadcrumb(self):
         frame=np.full_like(self.frame(),50)

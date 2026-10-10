@@ -6,6 +6,7 @@ from ctypes import wintypes
 from dataclasses import replace
 
 from app.controller.input_bindings import binding_for_command
+from app.controller.input_rejected import InputRejected
 from app.controller.pointer_motion import smooth_point
 from app.core.control_hotkeys import begin_bot_keys, end_bot_keys
 
@@ -60,7 +61,7 @@ class BLESerialTransport:
             if self.closed:
                 raise ConnectionError("ESP32 연결 종료")
             if guard is not None and not guard():
-                raise ConnectionError("중단되거나 비활성 게임의 입력을 폐기했습니다.")
+                raise InputRejected("중단되거나 비활성 게임의 입력을 폐기했습니다.")
             self.sequence = self.sequence % 2000000000 + 1
             seq = self.sequence
             raw = (

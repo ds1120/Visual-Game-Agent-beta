@@ -43,7 +43,7 @@
       "crop_to_viewport": true,
       "control_mode": "feedback_steps",
       "pin_search_margin": 0.12,
-      "analysis_width": 192,
+      "analysis_width": 256,
       "grid_cell_px": 4,
       "follow_centerline": true,
       "exclude_entity_icons": true,

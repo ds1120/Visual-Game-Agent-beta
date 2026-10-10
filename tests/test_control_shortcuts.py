@@ -12,6 +12,37 @@ import numpy as np
 
 
 class ControlShortcutsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_new_hunt_holds_right_and_repeats_skills_without_target_detection(self):
+        agent=MainAgent.__new__(MainAgent)
+        agent._epoch=1;agent._untargeted_hunt_mode=True
+        agent._stationary_manual_move_tick=AsyncMock(return_value=False)
+        agent._movement_hunt_command=Mock(side_effect=AssertionError('No monster targeting'))
+        agent._manual_skill_tick=AsyncMock(return_value=True)
+        executor=SimpleNamespace(_held_attack_command=None,execute=AsyncMock())
+        agent.scheduler=SimpleNamespace(executor=executor,submit=AsyncMock())
+        await agent._stationary_hunt_tick()
+        attack=executor.execute.await_args.args[0]
+        self.assertTrue(attack.maintain_attack)
+        self.assertIsNone(attack.target)
+        self.assertIsNone(attack.track_id)
+        agent._manual_skill_tick.assert_awaited_once_with(combat_hold=attack)
+
+    def setUp(self):
+        mouse=patch('app.ai.main_agent.mouse_left_down',return_value=False)
+        mouse.start()
+        self.addCleanup(mouse.stop)
+    async def test_pending_combat_skill_renews_attack_without_replacing_queued_skill(self):
+        agent=MainAgent.__new__(MainAgent)
+        agent._hunt_active=True;agent._move_only=False
+        agent._manual_skill_pending_at=10
+        attack=command('ATTACK',source='MOVEMENT_HUNT',reason='STATIONARY_HOLD',epoch=1)
+        agent.scheduler=SimpleNamespace(submit=AsyncMock(),executor=SimpleNamespace(renew_held_attack=Mock()))
+        with patch('app.ai.main_agent.mouse_left_down',return_value=False), patch('app.ai.main_agent.time.monotonic',return_value=10.6):
+            self.assertTrue(await agent._manual_skill_tick(combat_hold=attack))
+        agent.scheduler.executor.renew_held_attack.assert_called_once_with(attack)
+        agent.scheduler.submit.assert_not_awaited()
+        self.assertEqual(agent._manual_skill_pending_at,10)
+
     async def test_release_pause_preserves_modes_and_toggles_from_button_and_wheel(self):
         agent=MainAgent.__new__(MainAgent)
         agent._hunt_active=True;agent._move_only=True;agent._manual_skill_mode=True
@@ -65,23 +96,22 @@ class ControlShortcutsTests(unittest.IsolatedAsyncioTestCase):
         agent._hunt_active=True;agent._move_only=True;agent._manual_skill_mode=True
         agent._screen_guide_enabled=True;agent._planned_move_heading=(1.,0.)
         async def control(message):
-            paused=message=='/stop'
-            agent._paused=paused;agent._processing_halted=paused
-            agent._hunt_active=not paused;agent._move_only=False
-            agent._manual_skill_mode=False;agent._screen_guide_enabled=False
-            agent._planned_move_heading=None
+            self.assertEqual(message,'/release-pause')
+            agent._release_paused=not getattr(agent,'_release_paused',False)
             return True
         agent.handle_control=AsyncMock(side_effect=control)
         await agent._handle_control_shortcut(0)
-        self.assertTrue(agent._paused)
-        self.assertFalse(agent._manual_skill_mode)
+        self.assertTrue(agent._release_paused)
+        self.assertFalse(agent._paused)
+        self.assertTrue(agent._manual_skill_mode)
         await agent._handle_control_shortcut(0)
         self.assertFalse(agent._paused)
+        self.assertFalse(agent._release_paused)
         self.assertTrue(agent._move_only)
         self.assertTrue(agent._manual_skill_mode)
         self.assertTrue(agent._screen_guide_enabled)
         self.assertEqual(agent._planned_move_heading,(1.,0.))
-        self.assertEqual([call.args[0] for call in agent.handle_control.await_args_list],['/stop','이동'])
+        self.assertEqual([call.args[0] for call in agent.handle_control.await_args_list],['/release-pause','/release-pause'])
 
     async def test_tab_ignored_outside_game(self):
         agent=self.agent();agent._foreground=lambda:False
@@ -118,7 +148,7 @@ class ControlShortcutsTests(unittest.IsolatedAsyncioTestCase):
         agent.handle_control.assert_awaited_with('/hunt')
         await agent._handle_control_shortcut(2)
         agent.handle_control.assert_awaited_with('/stop')
-        for number, message in ((3, '이동'), (4, '반복스킬'), (5, '제자리사냥')):
+        for number, message in ((3, '이동'), (4, '반복스킬'), (5, '제자리사냥'), (6, '/release-pause'), (7, '/replan')):
             await agent._handle_control_shortcut(number)
             agent.handle_control.assert_awaited_with(message)
 
@@ -149,7 +179,7 @@ class ControlShortcutsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(agent._current_function_status()[0], '사냥중단')
         agent._paused = False
         agent._hunt_active = True
-        self.assertEqual(agent._current_function_status()[0], '사냥시작')
+        self.assertEqual(agent._current_function_status()[0], '대기')
         agent._move_only = True
         self.assertEqual(agent._current_function_status()[0], '이동')
         agent._stationary_skill_mode = True
@@ -212,7 +242,7 @@ class ControlShortcutsTests(unittest.IsolatedAsyncioTestCase):
         original = agent.handle_control
 
         async def control(message):
-            if message == '/hunt':
+            if message == '/activate-control':
                 agent._stationary_skill_mode = False
                 return True
             return await original(message)
@@ -234,7 +264,7 @@ class ControlShortcutsTests(unittest.IsolatedAsyncioTestCase):
             agent.emit_web_event=Mock()
             original=MainAgent.handle_control.__get__(agent)
             async def control(message):
-                if message=='/hunt':
+                if message=='/activate-control':
                     agent._paused=False;agent._processing_halted=False
                     agent._hunt_active=True;agent._stationary_skill_mode=False
                     return True
@@ -380,7 +410,7 @@ class ControlShortcutsTests(unittest.IsolatedAsyncioTestCase):
         # STOP owns the complete release; an earlier serial RELEASE must not
         # delay or prevent the emergency from reaching the scheduler.
         agent.scheduler.executor.release_held_attack.assert_not_awaited()
-        self.assertTrue(await agent.handle_control('사냥 시작'))
+        self.assertTrue(await agent.handle_control('/activate-control'))
         self.assertFalse(agent._processing_halted)
         self.assertFalse(agent._paused)
         self.assertFalse(agent._qwen_stopped)

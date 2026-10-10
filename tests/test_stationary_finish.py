@@ -162,6 +162,16 @@ class StationaryFinishTests(unittest.TestCase):
             self.assertIsNone(agent._stationary_post_death_command(10))
             self.assertIsNone(agent._stationary_attack_record['until'])
 
+    def test_roaming_hunt_holds_right_attack_until_two_second_deadline(self):
+        agent=self.agent()
+        agent._stationary_hunt_mode=False
+        attack=agent._stationary_post_death_command(10)
+        self.assertTrue(attack.maintain_attack)
+        self.assertEqual(binding_for_command(agent._docs['input.json'],attack),'mouse_right')
+        with patch('app.ai.main_agent.time.monotonic',return_value=11.99):
+            self.assertTrue(agent.can_execute(attack))
+        self.assertIsNone(agent._stationary_post_death_command(12))
+
     def test_additional_attack_still_requires_focus_fresh_capture_and_active_mode(self):
         agent=self.agent()
         attack=agent._stationary_post_death_command(10)
@@ -177,7 +187,7 @@ class StationaryFinishTests(unittest.TestCase):
             agent._paused=True
             self.assertFalse(agent.can_execute(attack))
             agent._paused=False
-            agent._stationary_hunt_mode=False
+            agent._movement_hunt_requested=False
             self.assertFalse(agent.can_execute(attack))
 
     def test_deadline_and_new_epoch_invalidate_queued_attack(self):

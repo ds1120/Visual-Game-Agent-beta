@@ -10,9 +10,52 @@ from app.controller.esp32_input_controller import ESP32InputController
 from app.core.action_command import ActionCommand
 from app.core.action_executor import ActionExecutor
 from app.core.action_scheduler import ActionScheduler
+from app.controller.input_rejected import InputRejected
 
 
 class MoveHoldTests(unittest.IsolatedAsyncioTestCase):
+    async def test_repeat_skill_basic_attack_is_validated_as_movement_hunt(self):
+        from app.core.fast_policy import command
+        controller=SimpleNamespace(attack=AsyncMock(return_value=True),use_skill=AsyncMock(return_value=True),
+            release_attack=AsyncMock(),release_move=AsyncMock())
+        executor=ActionExecutor(controller)
+        skill=replace(command('USE_SKILL',source='MANUAL_SKILL',skill_id='one',target=(.7,.4),track_id=7),
+                      maintain_attack=True,reason='STATIONARY_HOLD')
+        self.assertTrue(await executor.execute(skill))
+        basic=controller.attack.await_args.args[0]
+        self.assertEqual(basic.source,'MOVEMENT_HUNT')
+        self.assertEqual(basic.action_type,'ATTACK')
+        self.assertTrue(basic.maintain_attack)
+
+    def test_move_only_minimap_command_maintains_left_button(self):
+        agent=MainAgent.__new__(MainAgent)
+        agent._move_only=True
+        agent._docs={'input.json':{'movement':{'mode':'click'}}}
+        move=ActionCommand('MOVE',30,time.monotonic(),source='HUNT_EXPLORE',target=(.7,.4),move_clicks=3)
+        held=agent._finalize_navigation_command(move)
+        self.assertTrue(held.maintain_move)
+        self.assertEqual(held.move_clicks,1)
+        self.assertEqual(held.duration_ms,0)
+
+    async def test_stationary_hold_rejected_before_write_does_not_stop_agent(self):
+        controller=SimpleNamespace(attack=AsyncMock(side_effect=InputRejected('input became invalid')),
+            release_attack=AsyncMock(),release_move=AsyncMock())
+        executor=ActionExecutor(controller)
+        agent=MainAgent.__new__(MainAgent)
+        agent.scheduler=SimpleNamespace(executor=executor,submit=AsyncMock())
+        agent._stationary_manual_move_tick=AsyncMock(return_value=False)
+        agent._manual_skill_mode=False
+        agent._epoch=1
+        agent._movement_hunt_command=lambda:None
+        await agent._stationary_hunt_tick()
+        self.assertIsNone(executor._held_attack_command)
+        self.assertIsNone(executor._held_move_command)
+        self.assertEqual(executor.input_events[-1]['status'],'blocked')
+        controller.attack.side_effect=None
+        controller.attack.return_value=True
+        await agent._stationary_hunt_tick()
+        self.assertEqual(executor.input_events[-1]['status'],'sent')
+
     async def test_manual_mouse_watch_releases_esp32_without_waiting_for_event_loop(self):
         import threading
         from unittest.mock import Mock

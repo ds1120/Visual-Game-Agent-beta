@@ -5,6 +5,16 @@ from app.core.control_hotkeys import MODIFIERS, WM_HOTKEY, watch_control_hotkeys
 
 
 class WindowsHotkeysTests(unittest.TestCase):
+    def test_pause_and_replan_shortcuts_do_not_duplicate_message_and_poll(self):
+        pressed,_=self.watch([(True,[],set()),(True,[6],{0x11,0x36}),
+                              (True,[],{0x11}),(True,[7],{0x11,0x37})],frame_seconds=.1)
+        self.assertEqual(pressed,[6,7])
+
+    def test_pause_and_replan_fallback_without_windows_messages(self):
+        pressed,_=self.watch([(True,[],set()),(True,[],{0x11,0x36}),
+                              (True,[],set()),(True,[],{0x11,0x37})])
+        self.assertEqual(pressed,[6,7])
+
     def test_middle_button_toggles_on_each_click_without_hold_repeat(self):
         pressed,_=self.watch([(True,[],{0x04}),(True,[],{0x04}),
                               (True,[],set()),(True,[],{0x04}),
@@ -58,24 +68,24 @@ class WindowsHotkeysTests(unittest.TestCase):
         pressed, user32 = self.watch([(True, [1], set()),(True,[2],{0x11,0x32}),
                                      (False, [3], set()), (True, [4, 5], set())])
         self.assertEqual(pressed, [1, 2, 4, 5])
-        self.assertEqual(user32.RegisterHotKey.call_count, 5)
-        user32.RegisterHotKey.assert_any_call(None, 1, MODIFIERS, 0x31)
+        self.assertEqual(user32.RegisterHotKey.call_count, 7)
+        user32.RegisterHotKey.assert_any_call(None, 3, MODIFIERS, 0x33)
         self.assertTrue(MODIFIERS & 0x4000)
         self.assertFalse(MODIFIERS & 0x0004)
         self.assertTrue(MODIFIERS & 0x0002)
         self.assertFalse(MODIFIERS & 0x0001)
         user32.RegisterHotKey.assert_any_call(None, 5, MODIFIERS, 0x35)
-        self.assertEqual(user32.UnregisterHotKey.call_count, 5)
+        self.assertEqual(user32.UnregisterHotKey.call_count, 7)
 
     def test_failed_registration_fallback_ignores_hold_and_focus_return(self):
-        chord = {0x11, 0x31}
+        chord = {0x11, 0x33}
         with self.assertLogs('app.core.control_hotkeys', level='WARNING'):
             pressed, user32 = self.watch([(True, [], set()), (True, [], chord),
                                          (True, [], chord), (True, [], set()), (False, [], set()),
                                          (False, [], chord), (True, [], chord),
                                          (True, [], set()), (True, [], chord),
                                          (True, [], set())], registration=False)
-        self.assertEqual(pressed, [1, 1])
+        self.assertEqual(pressed, [3, 3])
         user32.UnregisterHotKey.assert_not_called()
 
     def test_repeat_ignores_following_skill_two_until_ctrl_is_released(self):

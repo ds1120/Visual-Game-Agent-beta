@@ -4,6 +4,19 @@ from app.core.physical_mouse import PhysicalMouse
 
 
 class PhysicalMouseTests(unittest.TestCase):
+    def test_esp32_hold_is_not_a_user_click_even_with_native_button_down(self):
+        mouse=PhysicalMouse()
+        mouse.identify('esp32',r'\\?\HID#VID&02303A_PID&4001#device')
+        mouse.update('esp32',1)
+        self.assertFalse(mouse.down(lambda:True))
+        mouse.update('user',1)
+        self.assertTrue(mouse.down(lambda:True))
+        mouse.update('esp32',2)
+        self.assertTrue(mouse.down(lambda:True))
+        mouse.update('user',2)
+        mouse.update('esp32',1)
+        self.assertFalse(mouse.down(lambda:True))
+
     def test_missing_raw_release_recovers_after_confirmed_native_release(self):
         mouse=PhysicalMouse();mouse.update(1,1)
         mouse.reconcile(True,10)

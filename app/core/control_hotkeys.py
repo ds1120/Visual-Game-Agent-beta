@@ -62,14 +62,14 @@ def watch_control_hotkeys(stop, foreground, pressed, user32=None):
     last_pressed = {}
     tab_was_down=False
     middle_was_down=False
-    def dispatch(number):
+    def dispatch(number,mouse=False):
         now=time.monotonic()
-        if number!=6 and now-last_pressed.get(number,float('-inf'))<HOTKEY_INTERVAL_SECONDS:return
-        last_pressed[number]=now
-        log.info('[HOTKEY] %s received', 'Tab' if number==0 else f'Ctrl+{number}')
+        if not mouse and now-last_pressed.get(number,float('-inf'))<HOTKEY_INTERVAL_SECONDS:return
+        if not mouse:last_pressed[number]=now
+        log.info('[HOTKEY] %s received', 'Mouse wheel' if mouse else 'Tab' if number==0 else f'Ctrl+{number}')
         pressed(number)
     try:
-        for number in range(1, 6):
+        for number in range(1, 8):
             if user32.RegisterHotKey(None, number, MODIFIERS, 0x30 + number):
                 registered.add(number)
                 log.info('[HOTKEY] Ctrl+%s registered', number)
@@ -87,7 +87,7 @@ def watch_control_hotkeys(stop, foreground, pressed, user32=None):
             tab_was_down=tab_down
             middle_down=down(0x04)
             if active and middle_down and not middle_was_down:
-                dispatch(6)
+                dispatch(6,mouse=True)
             middle_was_down=middle_down
             def accept(number):
                 nonlocal chord_locked
@@ -102,7 +102,7 @@ def watch_control_hotkeys(stop, foreground, pressed, user32=None):
                 if message.wParam in registered and foreground():
                     accept(int(message.wParam))
             # Dedicated polling also keeps unavailable hotkeys off the busy AI loop.
-            held = ({n for n in range(1, 6) if down(0x30 + n)}
+            held = ({n for n in range(1, 8) if down(0x30 + n)}
                     if down(0x11) and not down(0x10) and not down(0x12) else set())
             if active and was_foreground:
                 for number in sorted(held - previous):

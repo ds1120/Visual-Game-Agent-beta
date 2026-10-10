@@ -47,7 +47,7 @@
       "min_confidence": 0.6
     }
   },
-  "capture_fps": 60,
+  "capture_fps": 120,
   "learning_interval": 0.5,
   "motion_gating": false
 }

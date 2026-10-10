@@ -19,10 +19,22 @@ class PhysicalMouse:
         self.up_since=None
         self.press_at=None
         self.native_warning=False
+        self.agent_devices=set()
+
+    def identify(self,device,name):
+        name=name.upper()
+        # Firmware BLE PnP identity: vendor 303A, product 4001.
+        agent=('303A' in name and '4001' in name) or 'VISUALAGENT-ESP32' in name
+        with self.lock:
+            if agent:
+                self.agent_devices.add(device)
+                self.held.discard(device)
+        log.debug('[MOUSE RAW] device=%s agent=%s name=%s',device,agent,name)
 
     def update(self,device,flags):
         with self.lock:
             if flags&3:self.observed=True
+            if device in self.agent_devices:return
             if flags&1:
                 self.held.add(device)
                 self.up_since=None
@@ -88,6 +100,8 @@ class PhysicalMouse:
         u.RegisterRawInputDevices.restype=wintypes.BOOL
         u.GetRawInputData.argtypes=[wintypes.HANDLE,wintypes.UINT,ctypes.c_void_p,ctypes.POINTER(wintypes.UINT),wintypes.UINT]
         u.GetRawInputData.restype=wintypes.UINT
+        u.GetRawInputDeviceInfoW.argtypes=[wintypes.HANDLE,wintypes.UINT,ctypes.c_void_p,ctypes.POINTER(wintypes.UINT)]
+        u.GetRawInputDeviceInfoW.restype=wintypes.UINT
         u.PeekMessageW.argtypes=[ctypes.POINTER(wintypes.MSG),wintypes.HWND,wintypes.UINT,wintypes.UINT,wintypes.UINT]
         u.DispatchMessageW.argtypes=[ctypes.POINTER(wintypes.MSG)]
         u.DispatchMessageW.restype=ctypes.c_ssize_t
@@ -102,6 +116,7 @@ class PhysicalMouse:
             log.debug('[MOUSE RAW] 실제 마우스 장치별 버튼 감시 시작')
             self.ready.set()
             message=wintypes.MSG()
+            known_devices=set()
             while True:
                 while u.PeekMessageW(ctypes.byref(message),window,0,0,1):
                     if message.message==0xff:
@@ -112,10 +127,21 @@ class PhysicalMouse:
                         if u.GetRawInputData(handle,0x10000003,buffer,ctypes.byref(size),ctypes.sizeof(Header))!=0xffffffff:
                             header=Header.from_buffer_copy(buffer)
                             if header.kind==0 and size.value>=ctypes.sizeof(Header)+ctypes.sizeof(Mouse):
+                                if header.device not in known_devices:
+                                    length=wintypes.UINT()
+                                    u.GetRawInputDeviceInfoW(header.device,0x20000007,None,ctypes.byref(length))
+                                    if length.value:
+                                        name=ctypes.create_unicode_buffer(length.value+1)
+                                        if u.GetRawInputDeviceInfoW(header.device,0x20000007,name,ctypes.byref(length))!=0xffffffff:
+                                            self.identify(header.device,name.value)
+                                            known_devices.add(header.device)
                                 mouse=Mouse.from_buffer_copy(buffer,ctypes.sizeof(Header))
                                 self.update(header.device,mouse.buttons.split.flags)
                     elif message.message==0xfe and message.wParam==2:
-                        with self.lock:self.held.discard(message.lParam)
+                        known_devices.discard(message.lParam)
+                        with self.lock:
+                            self.held.discard(message.lParam)
+                            self.agent_devices.discard(message.lParam)
                     u.DispatchMessageW(ctypes.byref(message))
                 self.reconcile(bool(u.GetAsyncKeyState(0x01)&0x8000),time.monotonic())
                 threading.Event().wait(.002)

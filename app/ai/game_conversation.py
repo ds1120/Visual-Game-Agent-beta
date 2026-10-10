@@ -14,7 +14,7 @@ GAME_CHAT_SCHEMA["properties"]["directive"] = {
     "properties": {
         "action": {
             "type": "string",
-            "enum": ["NONE", "STOP", "RESUME", "HUNT", "ATTACK", "TAKE", "INTERACT", "MOVE", "USE_SKILL", "CAST_BUFF"],
+            "enum": ["NONE", "STOP", "RESUME", "ATTACK", "TAKE", "INTERACT", "MOVE", "USE_SKILL", "CAST_BUFF"],
         },
         "track_id": {"anyOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]},
         "direction": {
@@ -36,8 +36,7 @@ GAME_CHAT_SCHEMA["required"].append("directive")
 GAME_PROMPT = """사용자와 현재 게임에 대해 대화합니다. 이미지와 최신 sensor facts만 근거로 삼으세요.
 현재 실행 지시는 directive, 이후에도 유지할 설정 변경만 operations에 넣습니다.
 방향은 화면 기준 오른쪽=[1,0], 왼쪽=[-1,0], 위=[0,-1], 아래=[0,1]. MOVE는 짧은 반복 이동이며 ttl_seconds 최대10.
-사냥 시작/자동 사냥/맵을 돌아다니며 사냥 요청은 HUNT입니다. HUNT는 중단 명령까지 적 우선 공격하고 적이 없으면 짧은 탐색 이동을 반복합니다.
-HUNT는 track_id=null,direction=null,ttl_seconds=1입니다. 실제 전체 맵 경로는 보장하지 않으며 장애물과 미니맵 설정으로 짧은 이동을 검증합니다.
+사냥시작은 Ctrl+1 또는 웹 버튼으로 실행합니다. 이동과 몬스터 타겟팅 없이 오른쪽 버튼 유지와 반복스킬을 함께 실행합니다.
 스킬 사용은 USE_SKILL, 버프 사용은 CAST_BUFF입니다. input.json의 바인딩으로 입력하며 track_id=null,direction=null,ttl_seconds=1을 권장합니다. 스킬 발동이나 적중을 완료했다고 주장하지 마세요.
 공격/수집/대화 대상은 facts에 있는 track_id만 사용합니다. 공격은 confirmed monster/hostile만, TAKE는 confirmed item만 가능합니다.
 미확정 객체나 없는 대상이면 action=NONE으로 설명/질문하세요. 근거 없는 이동 경로/좌표/이름을 만들지 마세요.
@@ -62,7 +61,7 @@ def validate_directive(value, objects):
     action = value["action"]
     ttl = value["ttl_seconds"]
     if (
-        action not in {"NONE", "STOP", "RESUME", "HUNT", "ATTACK", "TAKE", "INTERACT", "MOVE", "USE_SKILL", "CAST_BUFF"}
+        action not in {"NONE", "STOP", "RESUME", "ATTACK", "TAKE", "INTERACT", "MOVE", "USE_SKILL", "CAST_BUFF"}
         or type(ttl) not in (int, float)
         or not math.isfinite(ttl)
         or not 1 <= ttl <= 10

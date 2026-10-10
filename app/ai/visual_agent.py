@@ -521,12 +521,12 @@ class VisualAgent:
             self._focus_resume_state = None
             self._focus_paused = False
             if auto_hunt:
-                await self.handle_control('이동' if getattr(self,'_move_only',False) else '/hunt')
+                await self.handle_control('이동' if getattr(self,'_move_only',False) else '/activate-control')
                 self.emit_web_event('focus_resumed', message='게임 창 활성화 · 자동사냥 시작/재개')
                 print('[FOCUS] 게임 창 활성화 · 자동사냥 시작/재개')
             elif state is not None and not self._processing_halted:
                 hunt, directive, remaining = state
-                await self.handle_control('이동' if getattr(self,'_move_only',False) else '/hunt' if hunt else '/resume')
+                await self.handle_control('이동' if getattr(self,'_move_only',False) else '/activate-control' if hunt else '/resume')
                 self._directive = directive
                 self._directive_until = time.monotonic()+remaining
                 self.emit_web_event('focus_resumed', message='게임 포커스 복귀 · 자동 재개')
@@ -1450,12 +1450,12 @@ class VisualAgent:
             return
         if number == 0:
             if self._foreground():
-                log.info('[HOTKEY] Tab -> pause/resume requested')
-                await self._toggle_tab_pause()
+                log.info('[HOTKEY] Tab -> RELEASE pause toggle')
+                await self.handle_control('/release-pause')
             return
         if number != 2 and not self._foreground():return
         message = {1: '/hunt', 2: '/stop', 3: '이동',
-                   4: '반복스킬', 5: '제자리사냥'}.get(number)
+                   4: '반복스킬', 5: '제자리사냥', 7: '/replan'}.get(number)
         if message is not None:
             log.info('[HOTKEY] Ctrl+%s -> %s', number, message)
             await self.handle_control(message)
@@ -1474,7 +1474,7 @@ class VisualAgent:
                 log.info('[HOTKEY] Tab -> all commands paused')
             else:
                 state=getattr(self,'_tab_resume_state',None)
-                message='이동' if state and state['_move_only'] else '/hunt' if not state or state['_hunt_active'] else '/resume'
+                message='이동' if state and state['_move_only'] else '/activate-control' if not state or state['_hunt_active'] else '/resume'
                 if await self.handle_control(message):
                     if state:
                         for key,value in state.items():setattr(self,key,value)
@@ -1762,7 +1762,7 @@ class VisualAgent:
                 self._running = False
             return True
         compact = "".join(value.split()).rstrip(".!?")
-        hunt = compact in {"/hunt", "hunt", "사냥시작", "사냥시작해", "사냥시작해줘", "자동사냥시작", "자동사냥시작해", "자동사냥", "자동사냥해", "자동사냥해줘", "자동사냥시작해줘", "사냥해", "사냥해줘", "사냥을해줘"}
+        hunt = compact == '/activate-control'
         if hunt or value in {"/resume", "계속", "다시 시작", "resume"}:
             self._focus_paused = False
             self._focus_resume_state = None
@@ -1944,8 +1944,6 @@ class VisualAgent:
                     await self.handle_control("/stop")
                 elif action == "RESUME":
                     await self.handle_control("/resume")
-                elif action == "HUNT":
-                    await self.handle_control("/hunt")
                 elif action != "NONE":
                     self._hunt_active = False
                     self._epoch += 1
@@ -1988,10 +1986,10 @@ class VisualAgent:
             self._emergency_loop,
             self._combat_recheck_loop,
         ]
-        if getattr(self,'movement_test_mode',False):
+        if getattr(self,'shared_movement_mode',False) or not getattr(self,'hud_mode',True):
             disabled={'_hud_loop','_yolo_loop','_calibration_loop','_learning_loop',
                       '_emergency_loop','_combat_recheck_loop','_navigation_replan_loop'}
-            workers=[self._hud_read_loop if worker.__name__=='_hud_loop' and getattr(self,'hud_mode',False) else
+            workers=[self._hud_read_loop if worker.__name__=='_hud_loop' and getattr(self,'hud_mode',True) else
                      self._idle_sensor_loop if worker.__name__ in disabled else
                      self._movement_test_loop if worker.__name__=='_action_loop' else worker
                      for worker in workers]

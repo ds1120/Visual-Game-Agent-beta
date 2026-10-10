@@ -264,7 +264,7 @@ class AgentBridge:
             self.agent.emit_web_event(
                 "chat_result",
                 request_id=request_id,
-                reply=(mode_reply or ("예정 진행 방향을 다시 선정합니다. 다른 통로가 있으면 이전 방향을 피하고, 최신 미니맵 확인 후 적용합니다." if "".join(message.lower().split()).rstrip(".!?") in {"/replan","예정진행방향변경","예정진행방향바꿔줘"} else "공격 없이 이동합니다. 주황색 선·핀을 우선 따라가고, 둘 다 없으면 미니맵 통로를 탐색합니다." if getattr(self.agent,"_move_only",False) and self.agent._hunt_active else "이동하며 사냥합니다. 주황색 선·핀을 우선 따라가고, 둘 다 없으면 미니맵 통로를 탐색합니다. 적을 만나면 공격을 우선하고 전투 후 이동을 이어갑니다." if getattr(self.agent,"_follow_orange_route",False) and self.agent._hunt_active else "지속 사냥을 시작합니다. HP와 객체 확인 후 적을 공격하고, 적이 없으면 장애물을 피하며 짧게 탐색 이동합니다." if self.agent._hunt_active else "제어 명령을 적용했습니다.")),
+                reply=(mode_reply or ("예정 진행 방향을 다시 선정합니다. 다른 통로가 있으면 이전 방향을 피하고, 최신 미니맵 확인 후 적용합니다." if "".join(message.lower().split()).rstrip(".!?") in {"/replan","예정진행방향변경","예정진행방향바꿔줘"} else "공격 없이 이동합니다. 주황색 선·핀을 우선 따라가고, 둘 다 없으면 미니맵 통로를 탐색합니다." if getattr(self.agent,"_move_only",False) and self.agent._hunt_active else "제어 명령을 적용했습니다.")),
                 saved=[],
                 directive={"action": "NONE"},
             )
@@ -535,7 +535,7 @@ class AgentBridge:
         if self.last_seen is None or self.hp_disconnect_reason:
             return
         a = self.agent
-        if getattr(a,'movement_test_mode',False):
+        if (not getattr(a,'hud_mode',True)):
             self.hp_missing_since=None
             return
         # Game-focused play must not be halted by the web HP deadline.

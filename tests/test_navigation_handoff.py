@@ -19,8 +19,21 @@ from app.core.action_scheduler import ActionScheduler
 
 
 class NavigationHandoffTests(unittest.TestCase):
+    def setUp(self):
+        mouse=patch('app.ai.main_agent.mouse_left_down',return_value=False)
+        mouse.start()
+        self.addCleanup(mouse.stop)
+
+    def test_random_hunt_heading_does_not_reverse_on_timer(self):
+        agent=MainAgent.__new__(MainAgent)
+        with patch('app.ai.main_agent.random.uniform',return_value=.4) as sample:
+            first=agent._random_move_heading()
+            agent._random_move_until=0
+            self.assertEqual(agent._random_move_heading(),first)
+            sample.assert_called_once()
+
     def test_held_arrow_input_accepts_small_marker_motion_but_not_reversal_or_stop(self):
-        agent=self.agent();agent._epoch=1;agent.movement_test_mode=True
+        agent=self.agent();agent._epoch=1;agent.hud_mode=False
         agent._paused=False;agent._processing_halted=False
         agent._move_only=True;agent._hunt_active=True;agent._screen_guide_enabled=True
         agent._fresh=lambda:True;agent._foreground=lambda:True
@@ -37,22 +50,25 @@ class NavigationHandoffTests(unittest.TestCase):
         agent._paused=True
         self.assertFalse(agent.can_execute(move))
 
-    def test_move_button_only_clicks_arrows_and_never_processes_other_navigation(self):
+    def test_move_button_uses_arrows_or_falls_back_to_retained_navigation(self):
         for arrow in (None,{'arrow_tip':(.6,.4),'arrow_direction':(0.,-1.)}):
             agent=self.agent();agent._epoch=1;agent._running=True
             agent._paused=False;agent._processing_halted=False;agent._move_only=True
             agent._fresh=lambda:True;agent._foreground=lambda:True
             agent._update_screen_move_guide=AsyncMock(return_value=arrow)
             agent._space_prompt_tick=AsyncMock(side_effect=AssertionError('No Space in move-only mode'))
-            agent._review_missing_navigation_route=Mock(side_effect=AssertionError('No minimap planning'))
-            agent._recover_rejected_movement=Mock(side_effect=AssertionError('No recovery'))
-            agent._continue_navigation=Mock(side_effect=AssertionError('No retained route'))
-            agent.scheduler=SimpleNamespace(submit=AsyncMock())
+            agent._review_missing_navigation_route=Mock()
+            agent._recover_rejected_movement=Mock()
+            agent._try_navigation_escape=AsyncMock(return_value=False)
+            agent._continue_navigation=Mock(return_value=True)
+            agent.scheduler=SimpleNamespace(submit=AsyncMock(),executor=SimpleNamespace())
             async def finish(_):agent._running=False
             with patch('app.ai.main_agent.asyncio.sleep',new=finish):
                 asyncio.run(agent._movement_test_loop())
             if arrow:self.assertEqual(agent.scheduler.submit.await_args.args[0].source,'SCREEN_ARROW_MOVE')
-            else:agent.scheduler.submit.assert_not_awaited()
+            else:
+                agent.scheduler.submit.assert_not_awaited()
+                agent._continue_navigation.assert_called_once()
 
     def test_planned_target_prioritizes_arrow_over_conflicting_orange_route(self):
         agent=self.agent();agent._screen_guide_enabled=True
@@ -81,7 +97,7 @@ class NavigationHandoffTests(unittest.TestCase):
 
     def test_fresh_arrow_click_is_not_vetoed_by_minimap_projection(self):
         agent=self.agent();agent._epoch=1
-        agent.movement_test_mode=True;agent._paused=False;agent._processing_halted=False
+        agent.hud_mode=False;agent._paused=False;agent._processing_halted=False
         agent._move_only=True;agent._hunt_active=True;agent._screen_guide_enabled=True
         agent._fresh=lambda:True;agent._foreground=lambda:True
         agent._screen_guide_seen_at=time.monotonic()
@@ -111,7 +127,7 @@ class NavigationHandoffTests(unittest.TestCase):
 
     def test_fixed_arrow_offset_passes_validation_in_all_directions(self):
         agent=self.agent();agent._epoch=1
-        agent.movement_test_mode=True;agent._paused=False;agent._processing_halted=False
+        agent.hud_mode=False;agent._paused=False;agent._processing_halted=False
         agent._move_only=True;agent._hunt_active=True;agent._screen_guide_enabled=True
         agent._fresh=lambda:True;agent._foreground=lambda:True
         agent._screen_guide_seen_at=time.monotonic()
@@ -238,7 +254,7 @@ class NavigationHandoffTests(unittest.TestCase):
         agent=self.agent()
         agent.click_journey=ClickJourney()
         agent._screen_guide_enabled=True
-        agent.movement_test_mode=True;agent._follow_orange_route=True
+        agent.hud_mode=False;agent._follow_orange_route=True
         agent.minimap_memory.orange_mask=np.full((192,192),255,np.uint8)
         agent._screen_move_guide={'target':(.6,.4),'direction':(1.,-1.)}
         agent._hunt_preferred_direction=(1.,-1.)
@@ -273,6 +289,9 @@ class NavigationHandoffTests(unittest.TestCase):
         agent=MainAgent.__new__(MainAgent)
         agent._move_only=False
         agent.profile=SimpleNamespace(name='generic')
+        agent._paused=False;agent._processing_halted=False;agent._epoch=0
+        agent.shared_movement_mode=True
+        agent._capture_at=time.monotonic();agent._foreground=lambda:True
         agent._hud_probe_command=None
         agent._docs={'input.json':{'movement':{'mode':'click'},'movement_skill':{'enabled':True,'key':'SPACE'}},
             'navigation.json':{'minimap':{'enabled':True,
@@ -299,8 +318,10 @@ class NavigationHandoffTests(unittest.TestCase):
     def test_input_guard_uses_current_verified_grid_after_handoff(self):
         agent=self.agent()
         move=ActionCommand('MOVE',10,time.monotonic(),target=(.53,.5),direction=(1.,0.))
-        with patch.object(VisualAgent,'can_execute',return_value=True):
-            self.assertTrue(agent.can_execute(move))
+        for hud_mode in (False,True):
+            agent.hud_mode=hud_mode
+            with patch.object(VisualAgent,'can_execute',side_effect=AssertionError('HUD must not change hotkey input')):
+                self.assertTrue(agent.can_execute(move))
 
     def test_input_guard_still_rejects_wall_on_verified_grid(self):
         agent=self.agent()
@@ -311,7 +332,7 @@ class NavigationHandoffTests(unittest.TestCase):
 
     def test_movement_test_allows_verified_move_without_hud(self):
         agent=self.agent()
-        agent.movement_test_mode=True
+        agent.hud_mode=False
         agent._paused=False
         agent._processing_halted=False
         agent._epoch=0
@@ -327,7 +348,7 @@ class NavigationHandoffTests(unittest.TestCase):
 
     def test_movement_test_blocks_buff_and_skill_commands(self):
         agent=self.agent()
-        agent.movement_test_mode=True
+        agent.hud_mode=False
         for action in ('ATTACK','USE_SKILL','CAST_BUFF','USE_POTION'):
             self.assertFalse(agent.can_execute(ActionCommand(action,10,time.monotonic())))
 
@@ -343,10 +364,12 @@ class NavigationHandoffTests(unittest.TestCase):
         agent._docs['input.json']['attack_skills']=[{'id':'registered','enabled':True,'key':'2','cooldown_ms':1000}]
         agent._docs['input.json']['bindings']={'CAST_BUFF':'4'}
         attack=agent._movement_hunt_command()
-        self.assertEqual(attack.action_type,'USE_SKILL')
+        self.assertEqual(attack.action_type,'ATTACK')
+        self.assertTrue(attack.maintain_attack)
+        self.assertEqual(attack.reason,'STATIONARY_HOLD')
         self.assertEqual(attack.track_id,7)
         self.assertEqual(attack.source,'MOVEMENT_HUNT')
-        agent.movement_test_mode=True;agent._processing_halted=False
+        agent.hud_mode=False;agent._processing_halted=False
         agent._capture_at=time.monotonic();agent._foreground=lambda:True
         self.assertTrue(agent.can_execute(attack))
         agent._movement_hunt_requested=False
@@ -355,21 +378,9 @@ class NavigationHandoffTests(unittest.TestCase):
         agent._confirm_diablo_enemies.return_value=[]
         self.assertEqual(agent._movement_hunt_command().reason,'MONSTER_RESULT_WAIT')
         agent.combat_guard.blocked[7]='HEALTH_DEPLETED_CONFIRMED'
+        self.assertEqual(agent._movement_hunt_command().reason,'STATIONARY_POST_DEATH')
+        agent._stationary_attack_record['until']=time.monotonic()-1
         self.assertIsNone(agent._movement_hunt_command())
-
-    def test_hunt_start_switches_move_only_to_move_and_attack(self):
-        for message in ('사냥 시작','자동사냥 시작해줘','사냥해','/hunt'):
-            agent=self.agent();agent.profile.name='diablo4'
-            agent._paused=False;agent._move_only=True;agent._hunt_active=True
-            agent.click_journey=ClickJourney();agent.emit_web_event=Mock()
-            agent.vl=SimpleNamespace();agent.chat_vl=agent.vl
-            agent._scene_scan_task=None
-            with patch.object(VisualAgent,'handle_control',new=AsyncMock(return_value=True)) as control:
-                self.assertTrue(asyncio.run(agent.handle_control(message)))
-            control.assert_not_awaited()
-            self.assertFalse(agent._move_only)
-            self.assertTrue(agent._movement_hunt_enabled())
-            self.assertTrue(agent._repeat_skills_hunting)
 
     def test_repeat_skill_button_command_enables_interval_mode(self):
         agent=self.agent();agent.profile.name='diablo4'
@@ -454,7 +465,7 @@ class NavigationHandoffTests(unittest.TestCase):
         self.assertTrue(agent._movement_hunt_enabled())
 
     def test_manual_skill_uses_registered_interval_without_enemy(self):
-        agent=self.agent();agent.movement_test_mode=True
+        agent=self.agent();agent.hud_mode=False
         agent._manual_skill_mode=True;agent._paused=False;agent._processing_halted=False
         agent._epoch=0;agent._capture_at=time.monotonic();agent._foreground=lambda:True
         agent._docs['input.json']['attack_skills']=[{'id':'timed','enabled':True,'key':'2','cooldown_ms':3200}]
@@ -671,7 +682,7 @@ class NavigationHandoffTests(unittest.TestCase):
         target=agent._escape_cursor_target()
         self.assertIsNotNone(target)
         self.assertGreater(target[0],.95)
-        agent.movement_test_mode=True
+        agent.hud_mode=False
         agent._paused=False;agent._processing_halted=False;agent._epoch=0
         agent._capture_at=time.monotonic();agent._foreground=lambda:True
         probe=ActionCommand('DODGE',10,time.monotonic(),source='NAVIGATION_ESCAPE',target=target)
@@ -681,7 +692,7 @@ class NavigationHandoffTests(unittest.TestCase):
 
     def test_detected_wall_starts_skill_probe_before_replanning(self):
         agent=self.agent()
-        agent.movement_test_mode=True
+        agent.hud_mode=False
         agent._epoch=0
         agent.click_journey=ClickJourney()
         memory=agent.minimap_memory
@@ -779,7 +790,7 @@ class NavigationHandoffTests(unittest.TestCase):
 
     def test_hud_click_rejection_does_not_change_heading_in_movement_test(self):
         agent=self.agent()
-        agent.movement_test_mode=True
+        agent.hud_mode=False
         agent.click_journey=ClickJourney()
         memory=agent.minimap_memory
         memory.goal=np.array([174.,96.])

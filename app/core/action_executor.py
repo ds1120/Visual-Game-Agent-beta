@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.core.action_command import ActionCommand
 from app.controller.input_controller import InputController
+from app.controller.input_rejected import InputRejected
 from collections import deque
 import asyncio
 import time
@@ -95,6 +96,10 @@ class ActionExecutor:
                 self._held_attack_command = command
                 if action != 'ATTACK':
                     basic = replace(command, action_type='ATTACK', skill_id=None)
+                    if command.source=='MANUAL_SKILL' and command.reason=='STATIONARY_HOLD':
+                        basic=replace(basic,source='MOVEMENT_HUNT')
+                        if command.target is None and command.track_id is None:
+                            basic=replace(basic,source='STATIONARY_HUNT',reason='STATIONARY_MODE_HOLD')
                     if await self._input.attack(basic) is False:
                         await self.release_held_attack()
                         status = 'blocked'
@@ -135,6 +140,11 @@ class ActionExecutor:
                 self._held_move_command=replace(command,expires_at=time.monotonic()+.6)
             self.last_completed_at = time.monotonic()
             return True
+        except InputRejected as exc:
+            status = 'blocked'
+            self.last_error = str(exc)
+            await self.release_held_attack()
+            return False
         except BaseException as exc:
             await self.release_held_attack()
             status = "cancelled" if type(exc).__name__ == "CancelledError" else "failed"

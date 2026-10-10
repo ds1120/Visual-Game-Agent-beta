@@ -534,7 +534,12 @@ class MinimapMemory:
                         self.last_failure_at=now;self.recovery_count+=1
                         # The agent confirms a wall with its movement skill before
                         # releasing a locked destination. A stuck sample is only evidence.
-                        if not getattr(self,'lock_current_heading',False):
+                        if getattr(self,'lock_goal_until_arrival',False):
+                            self.goal=None;self.goal_heading=None;self.route=[]
+                            self.replan_goal=None
+                            self.recovery_stage='detour'
+                            self.blocked_goal_heading=np.asarray(direction,float)
+                        elif not getattr(self,'lock_current_heading',False):
                             self.goal=None
                             self.recovery_stage=('recenter','backtrack','detour','blocked')[min(3,self.recovery_count-1)]
             self.pending=deque(remaining,maxlen=20)
@@ -609,6 +614,10 @@ class MinimapMemory:
         now=time.monotonic() if now is None else now
         with self.lock:
             if not self.valid or now-self.last_update>.8:return None
+            if (getattr(self,'lock_goal_until_arrival',False) and self.goal is not None
+                    and self.position is not None and np.linalg.norm(self.goal-self.position)>max(4.,min(6.,self.CELL*1.5))
+                    and not self.stuck):
+                target_world=self.goal.copy()
             if self.replan_requested:
                 self.replan_requested=False
                 flags=(getattr(self,'follow_orange_route',False),getattr(self,'follow_pin_route',False))
@@ -700,6 +709,11 @@ class MinimapMemory:
                     if max(abs(x-start[0]),abs(y-start[1]))>1 and a-self.CELL<=point[0]<=cx+self.CELL and b-self.CELL<=point[1]<=d+self.CELL:screen_blocked.add((x,y))
             # Node penalties are invariant during this search; compute once, not per edge.
             penalties=center_weight/(self.clearance+.5)
+            wall_follow=getattr(self,'follow_wall',False) and pin_target is None
+            wall_gap=max(1.5,min(3.,self.preferred_clearance))
+            if wall_follow:
+                # Keep a safe band beside walls rather than favoring room centers.
+                penalties=2*np.abs(self.clearance-wall_gap)+4/(self.clearance+.5)
             if orange_distance is not None:
                 xs=np.minimum(self.mask.shape[1]-1,((np.arange(w)+.5)*self.CELL).astype(int))
                 ys=np.minimum(self.mask.shape[0]-1,((np.arange(h)+.5)*self.CELL).astype(int))
@@ -783,6 +797,11 @@ class MinimapMemory:
                     world=self.origin+(np.array(node)+.5)*self.CELL
                     repeats=sum(np.linalg.norm(world-goal)<=self.CELL*3 for goal in self.completed_goals)
                     priority=(-repeats,int(key not in self.visits),int(key not in recent_keys),-reused[node]/max(1,hops[node]))+priority
+                if wall_follow and self.recovery_stage=='none':
+                    safe=self.clearance[node[1],node[0]]>=1.5
+                    gap=abs(float(self.clearance[node[1],node[0]])-wall_gap)
+                    priority=(int(safe),int(key not in recent_keys),int(key not in self.visits),
+                              -round(gap),int(alignment>0),score)+priority
                 if priority>best_score:best,best_score=node,priority
             if self.recovery_stage=='backtrack':
                 for position in reversed(self.breadcrumbs):

@@ -16,7 +16,7 @@ class ArrowEscapeTests(unittest.IsolatedAsyncioTestCase):
     def agent(self):
         a=MainAgent.__new__(MainAgent)
         a._epoch=1;a._move_only=True;a._hunt_active=True
-        a.movement_test_mode=True;a._paused=False;a._processing_halted=False
+        a.hud_mode=False;a._paused=False;a._processing_halted=False
         a._screen_guide_enabled=True;a.profile=SimpleNamespace(name='diablo4')
         a._latest_frame=np.zeros((600,960,3),np.uint8)
         a._world_player_origin=lambda:(.5,.5)

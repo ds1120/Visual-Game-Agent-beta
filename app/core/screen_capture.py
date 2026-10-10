@@ -135,7 +135,7 @@ class ScreenCapture:
         down = lambda key: bool(ctypes.windll.user32.GetAsyncKeyState(key) & 0x8000)
         if not (down(0x11) and down(0x10)):
             return set()
-        return {number for number in range(1, 6) if down(0x30 + number)}
+        return {number for number in range(1, 8) if down(0x30 + number)}
 
     @staticmethod
     def emergency_stop_held():
