@@ -88,7 +88,7 @@ class ControlShortcutsTests(unittest.IsolatedAsyncioTestCase):
         agent._handle_control_shortcut=AsyncMock(side_effect=handle)
         def watch(stop,foreground,pressed):
             pressed(2);pressed(2);stop.wait(1)
-        with patch('app.ai.visual_agent.watch_control_hotkeys',side_effect=watch), self.assertLogs('app.ai.visual_agent',level='ERROR'):
+        with patch('app.ai.visual_agent.watch_control_hotkeys',side_effect=watch), self.assertLogs('app.ai.visual_agent',level='DEBUG'):
             await agent._control_shortcuts_loop()
         self.assertEqual(attempts,[2,2])
     async def test_tab_restores_movement_and_repeat_skill_combination(self):

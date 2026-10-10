@@ -1,7 +1,7 @@
 """USB serial commands to ESP32 BLE HID; no software input injection."""
 
 from __future__ import annotations
-import asyncio, ctypes, json, math, os, secrets, threading, time
+import asyncio, ctypes, json, logging, math, os, secrets, threading, time
 from ctypes import wintypes
 from dataclasses import replace
 
@@ -209,9 +209,9 @@ class ESP32InputController:
                     on_pause()
                     try:
                         self.transport.request('RELEASE')
-                        print('[MOUSE ESP32] 사용자 버튼 유지 · RELEASE 전송 완료')
+                        logging.getLogger(__name__).debug('[MOUSE ESP32] 사용자 버튼 유지 · RELEASE 전송 완료')
                     except Exception as exc:
-                        print(f'[MOUSE ESP32] RELEASE 전송 실패: {exc}')
+                        logging.getLogger(__name__).debug(f'[MOUSE ESP32] RELEASE 전송 실패: {exc}')
                         continue  # Retry while held.
                 paused=down
         self._manual_watch_thread=threading.Thread(target=watch,name='esp32-manual-mouse',daemon=True)

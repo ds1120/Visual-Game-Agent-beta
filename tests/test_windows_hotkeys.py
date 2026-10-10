@@ -28,7 +28,7 @@ class WindowsHotkeysTests(unittest.TestCase):
         self.assertEqual(pressed,[0,0,0])
 
     def test_ctrl_without_shift_works_in_key_state_fallback(self):
-        with self.assertLogs('app.core.control_hotkeys',level='WARNING'):
+        with self.assertLogs('app.core.control_hotkeys',level='DEBUG'):
             pressed,_=self.watch([(True,[],set()),(True,[],{0x11,0x33}),
                                   (True,[],set()),(True,[],{0x11,0x32})],registration=False)
         self.assertEqual(pressed,[3,2])
@@ -79,7 +79,7 @@ class WindowsHotkeysTests(unittest.TestCase):
 
     def test_failed_registration_fallback_ignores_hold_and_focus_return(self):
         chord = {0x11, 0x33}
-        with self.assertLogs('app.core.control_hotkeys', level='WARNING'):
+        with self.assertLogs('app.core.control_hotkeys', level='DEBUG'):
             pressed, user32 = self.watch([(True, [], set()), (True, [], chord),
                                          (True, [], chord), (True, [], set()), (False, [], set()),
                                          (False, [], chord), (True, [], chord),

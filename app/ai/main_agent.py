@@ -606,11 +606,11 @@ class MainAgent(VisualAgent):
                  and not self.combat_guard.is_blocked(o) and self.combat_guard.permits(o.track_id)]
         if not enemies:
             if getattr(self,'_hunt_enemy_seen',None) is not False:
-                print('[HUNT ATTACK] 확인된 몬스터 체력바 없음 · 이동 계속')
+                logging.getLogger(__name__).debug('[HUNT ATTACK] 확인된 몬스터 체력바 없음 · 이동 계속')
                 self._hunt_enemy_seen=False
             return None
         if not getattr(self,'_hunt_enemy_seen',False):
-            print('[HUNT ATTACK] 몬스터 감지 · 우클릭 공격 시작')
+            logging.getLogger(__name__).debug('[HUNT ATTACK] 몬스터 감지 · 우클릭 공격 시작')
             self._hunt_enemy_seen=True
         h,w=frame.shape[:2];origin=self._world_player_origin()
         def center(o):
@@ -1512,7 +1512,7 @@ class MainAgent(VisualAgent):
                 release=getattr(controller,'release_inputs',controller.stop)
                 await release()
                 self._physical_mouse_pause()
-            print('[CONTROL] RELEASE pause '+('enabled' if self._release_paused else 'disabled'))
+            logging.getLogger(__name__).debug('[CONTROL] RELEASE pause '+('enabled' if self._release_paused else 'disabled'))
             self.emit_web_event('control',action='release_pause',release_paused=self._release_paused)
             return True
         paused=self._paused

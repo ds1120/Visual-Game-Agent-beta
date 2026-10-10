@@ -1430,7 +1430,7 @@ class VisualAgent:
             try:
                 watch_control_hotkeys(stop, self._foreground, pressed)
             except Exception:
-                log.exception('[HOTKEY] shortcut listener failed')
+                log.debug('[HOTKEY] shortcut listener failed', exc_info=True)
         thread = threading.Thread(target=watch, name='game-control-hotkeys', daemon=True)
         thread.start()
         try:
@@ -1439,7 +1439,7 @@ class VisualAgent:
                 try:
                     await self._handle_control_shortcut(number)
                 except Exception:
-                    log.exception('[HOTKEY] control failed; listener remains active')
+                    log.debug('[HOTKEY] control failed; listener remains active', exc_info=True)
         finally:
             stop.set()
             await asyncio.to_thread(thread.join, .5)
@@ -1450,14 +1450,14 @@ class VisualAgent:
             return
         if number == 0:
             if self._foreground():
-                log.info('[HOTKEY] Tab -> RELEASE pause toggle')
+                log.debug('[HOTKEY] Tab -> RELEASE pause toggle')
                 await self.handle_control('/release-pause')
             return
         if number != 2 and not self._foreground():return
         message = {1: '/hunt', 2: '/stop', 3: '이동',
                    4: '반복스킬', 5: '제자리사냥', 7: '/replan'}.get(number)
         if message is not None:
-            log.info('[HOTKEY] Ctrl+%s -> %s', number, message)
+            log.debug('[HOTKEY] Ctrl+%s -> %s', number, message)
             await self.handle_control(message)
 
     async def _toggle_tab_pause(self):
@@ -1471,7 +1471,7 @@ class VisualAgent:
                 state={key:getattr(self,key,None) for key in fields}
                 await self.handle_control('/stop')
                 self._tab_resume_state=state
-                log.info('[HOTKEY] Tab -> all commands paused')
+                log.debug('[HOTKEY] Tab -> all commands paused')
             else:
                 state=getattr(self,'_tab_resume_state',None)
                 message='이동' if state and state['_move_only'] else '/activate-control' if not state or state['_hunt_active'] else '/resume'
@@ -1479,7 +1479,7 @@ class VisualAgent:
                     if state:
                         for key,value in state.items():setattr(self,key,value)
                     self._tab_resume_state=None
-                    log.info('[HOTKEY] Tab -> previous control modes resumed')
+                    log.debug('[HOTKEY] Tab -> previous control modes resumed')
         finally:
             self._tab_toggle_inflight=False
 
@@ -1749,7 +1749,7 @@ class VisualAgent:
             self._directive = None
             self._hunt_active = False
             self.emit_web_event("control", action="stop")
-            print('[CONTROL] pause applied; sending STOP to input controller')
+            log.debug('[CONTROL] pause applied; sending STOP to input controller')
             try:
                 await self.scheduler.submit_emergency(
                     command("STOP", source="USER_STOP", epoch=self._epoch)
@@ -1757,7 +1757,7 @@ class VisualAgent:
             except Exception as exc:
                 print(f'[STOP INPUT] failed: {exc}')
                 raise
-            print("[CONTROL] stopped; pending model commands invalidated")
+            log.debug("[CONTROL] stopped; pending model commands invalidated")
             if value == "/quit":
                 self._running = False
             return True
@@ -1779,7 +1779,7 @@ class VisualAgent:
             self._hunt_active = hunt
             self._hunt_heading = 0
             self._hunt_turn_at = time.monotonic() + 4
-            print("[CONTROL] automatic profile reactions resumed")
+            log.debug("[CONTROL] automatic profile reactions resumed")
             self.emit_web_event("control", action="resume")
             return True
         if value == "/status":

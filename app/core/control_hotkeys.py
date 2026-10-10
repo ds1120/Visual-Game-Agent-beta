@@ -66,15 +66,15 @@ def watch_control_hotkeys(stop, foreground, pressed, user32=None):
         now=time.monotonic()
         if not mouse and now-last_pressed.get(number,float('-inf'))<HOTKEY_INTERVAL_SECONDS:return
         if not mouse:last_pressed[number]=now
-        log.info('[HOTKEY] %s received', 'Mouse wheel' if mouse else 'Tab' if number==0 else f'Ctrl+{number}')
+        log.debug('[HOTKEY] %s received', 'Mouse wheel' if mouse else 'Tab' if number==0 else f'Ctrl+{number}')
         pressed(number)
     try:
         for number in range(1, 8):
             if user32.RegisterHotKey(None, number, MODIFIERS, 0x30 + number):
                 registered.add(number)
-                log.info('[HOTKEY] Ctrl+%s registered', number)
+                log.debug('[HOTKEY] Ctrl+%s registered', number)
             else:
-                log.warning('[HOTKEY] Ctrl+%s registration failed (Windows error %s); using key-state fallback',
+                log.debug('[HOTKEY] Ctrl+%s registration failed (Windows error %s); using key-state fallback',
                             number, getattr(ctypes, 'get_last_error', lambda: 0)())
         message = wintypes.MSG()
         while not stop.is_set():
