@@ -6,7 +6,9 @@ import cv2
 import numpy as np
 from app.vision.game_viewport import game_viewport
 
-TEMPLATE_PATH = Path(__file__).with_name('assets') / 'route_arrow.png'
+# This detector is used by the Diablo IV profile; its learned silhouettes
+# belong to that game rather than to the shared vision package.
+TEMPLATE_PATH = Path(__file__).resolve().parents[1] / 'profiles' / 'diablo4' / 'assets' / 'navigation' / 'route_arrow.png'
 
 
 @lru_cache(maxsize=1)

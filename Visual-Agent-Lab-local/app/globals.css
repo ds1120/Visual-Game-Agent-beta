@@ -43,3 +43,8 @@
 
 .game-top-controls{flex-wrap:wrap}.game-top-controls .top-attack-status{flex:0 0 100%;margin:0;padding:8px 12px;box-sizing:border-box}
 .attack-diagnosis.release-paused{background:#351619;border-color:#d64c55;color:#ff939b}
+/* Optional calibration stays collapsed on the everyday settings page. */
+.settings-advanced { margin: 20px 0; border: 1px solid var(--border, #33413e); border-radius: 10px; padding: 14px 16px; }
+.settings-advanced > summary { cursor: pointer; font-weight: 600; }
+.settings-advanced[open] > summary { margin-bottom: 16px; }
+.settings-advanced > div { padding-top: 6px; }

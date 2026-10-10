@@ -104,7 +104,8 @@ class ScreenRouteGuideTests(unittest.TestCase):
             frame=np.full((600,960,3),80,np.uint8)
             frame[150:260,500:600]=patch
             # A perfect arrow-shaped HUD icon must not replace the world marker.
-            hud=cv2.imread('app/vision/assets/route_arrow_white.png',cv2.IMREAD_GRAYSCALE)
+            from app.vision.arrow_template import TEMPLATE_PATH
+            hud=cv2.imread(str(TEMPLATE_PATH.with_name('route_arrow_white.png')),cv2.IMREAD_GRAYSCALE)
             frame[490:586,550:646][hud>0]=255
             guide=screen_route_guide(frame,arrow_only=True)
             self.assertIsNotNone(guide,msg=f'{angle=}')

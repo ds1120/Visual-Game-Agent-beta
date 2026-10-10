@@ -357,7 +357,7 @@ class AgentBridge:
 
     async def game_settings(self, request):
         docs, revisions = await asyncio.to_thread(self.agent.store.snapshot)
-        return web.json_response({"profile":self.agent.profile.name, "revisions":revisions, "input":docs["input.json"], "navigation":docs["navigation.json"], "window_titles":docs["vision.json"]["window_titles"], "detector":{k:docs["vision.json"]["yolo"][k] for k in ("enabled","model_path","confidence")}, "class_rules":docs["vision.json"].get("class_rules", {}), "hud_layout":docs["hud.json"].get("layout","classic"), "buff_region":docs["hud.json"]["regions"].get("buffs", {"visible":False,"bbox":None,"confidence":0})})
+        return web.json_response({"profile":self.agent.profile.name, "revisions":revisions, "input":docs["input.json"], "navigation":docs["navigation.json"], "window_titles":docs["vision.json"]["window_titles"], "capture_fps":docs["vision.json"].get("capture_fps",60), "detector":{k:docs["vision.json"]["yolo"][k] for k in ("enabled","model_path","confidence")}, "class_rules":docs["vision.json"].get("class_rules", {}), "hud_layout":docs["hud.json"].get("layout","classic"), "buff_region":docs["hud.json"]["regions"].get("buffs", {"visible":False,"bbox":None,"confidence":0})})
 
     async def save_game_settings(self, request):
         data = await request.json()
@@ -381,6 +381,8 @@ class AgentBridge:
         vision=copy.deepcopy(docs["vision.json"])
         if "window_titles" in data:
             vision["window_titles"]=data["window_titles"]
+        if "capture_fps" in data:
+            vision["capture_fps"]=data["capture_fps"]
         if "detector" in data:
             value=data["detector"]
             if not isinstance(value,dict) or set(value)!={"enabled","model_path","confidence"}:raise ValueError("객체 탐지 설정 형식 오류")
@@ -394,6 +396,8 @@ class AgentBridge:
             operations = []
             if "window_titles" in data:
                 operations.append({"file":"vision.json","op":"replace","path":"/window_titles","value_json":json.dumps(data["window_titles"],ensure_ascii=False)})
+            if "capture_fps" in data:
+                operations.append({"file":"vision.json","op":"add","path":"/capture_fps","value_json":json.dumps(vision["capture_fps"],ensure_ascii=False)})
             if "class_rules" in data:
                 operations.append({"file":"vision.json","op":"add","path":"/class_rules","value_json":json.dumps(vision["class_rules"],ensure_ascii=False)})
             if "detector" in data:

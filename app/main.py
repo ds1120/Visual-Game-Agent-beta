@@ -4,7 +4,8 @@ import asyncio
 import configparser
 import argparse
 
-from app.ai.main_agent import MainAgent as VisualAgent
+from app.ai.agent_registry import create_agent
+from app.profiles.agent_runtime import load_agent_runtime
 from app.core.screen_capture import ScreenCapture
 from app.controller.input_controller_factory import create_input_controller
 from app.core.action_executor import ActionExecutor
@@ -23,7 +24,7 @@ async def main() -> None:
         "--web",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="비공개 웹 연결 서버 기본 실행 (끄려면 --no-web, 기본 자동사냥, 게임 활성화 시 실행)",
+        help="비공개 웹 연결 서버 기본 실행 (끄려면 --no-web, 게임별 기능은 버튼·핫키로 실행)",
     )
     parser.add_argument("--web-port", type=int, default=8766)
     parser.add_argument("--no-browser", action="store_true", help="로컬 대시보드 자동 열기 끄기")
@@ -42,7 +43,7 @@ async def main() -> None:
     profile = create_game_profile(active_game(game_profile))
     ensure_runtime_settings(profile.profile_dir)
     profile_docs, _ = ProfileStore(profile.profile_dir).snapshot()
-    default_window_titles = {"diablo4": ["Diablo IV", "Diablo 4", "디아블로 IV"]}
+    runtime = load_agent_runtime(profile.profile_dir).get('agent', {})
     configured_titles = [
         x.strip()
         for x in cfg.get("CAPTURE", "window_titles", fallback="").split(",")
@@ -51,7 +52,7 @@ async def main() -> None:
     window_titles = (
         profile_docs["vision.json"]["window_titles"]
         or configured_titles
-        or default_window_titles.get(profile.name, [])
+        or []
     )
 
     capture = ScreenCapture(
@@ -93,7 +94,7 @@ async def main() -> None:
     executor = ActionExecutor(controller)
     scheduler = ActionScheduler(executor)
 
-    agent = VisualAgent(
+    agent = create_agent(
         capture=capture,
         vl=vl,
         scheduler=scheduler,
@@ -109,11 +110,11 @@ async def main() -> None:
         chat_vl=chat_vl,
         console_enabled=cfg.getboolean("AGENT", "console_enabled", fallback=True)
         and not args.no_chat,
-        reaction_interval=cfg.getfloat("AGENT", "reaction_interval", fallback=0.05),
+        reaction_interval=runtime.get('reaction_interval',cfg.getfloat("AGENT", "reaction_interval", fallback=0.05)),
         capture_fps=profile_docs["vision.json"].get(
             "capture_fps", cfg.getfloat("AGENT", "capture_fps", fallback=60.0)
         ),
-        hud_interval=cfg.getfloat("AGENT", "hud_interval", fallback=0.05),
+        hud_interval=runtime.get('hud_interval',cfg.getfloat("AGENT", "hud_interval", fallback=0.05)),
         intent_interval=cfg.getfloat("AGENT", "intent_interval", fallback=1.0),
         intent_cache_ttl=cfg.getfloat("AGENT", "intent_cache_ttl", fallback=3.0),
         yolo_config={
@@ -124,9 +125,10 @@ async def main() -> None:
         },
     )
 
-    agent.hud_mode=cfg.getboolean('AGENT','hud_mode',fallback=True)
+    agent.hud_mode=runtime.get('hud_mode',cfg.getboolean('AGENT','hud_mode',fallback=True))
     agent.shared_movement_mode=True
-    agent.minimap_memory.registration_reset_seconds=max(2,min(300,cfg.getfloat('AGENT','minimap_reset_wait_seconds',fallback=30)))
+    if hasattr(agent,'minimap_memory'):
+        agent.minimap_memory.registration_reset_seconds=max(2,min(300,runtime.get('minimap_reset_wait_seconds',30)))
     agent._move_only=True
     print('[MODE] 공통 핫키/이동/사냥 · HUD 읽기 ' + ('켜짐' if agent.hud_mode else '꺼짐'))
     bridge = None

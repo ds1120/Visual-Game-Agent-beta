@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "agent": {
+    "hud_mode": false,
+    "hud_interval": 0.2,
+    "reaction_interval": 0.05
+  }
+}

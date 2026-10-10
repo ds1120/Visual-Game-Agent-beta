@@ -36,7 +36,7 @@ GAME_CHAT_SCHEMA["required"].append("directive")
 GAME_PROMPT = """사용자와 현재 게임에 대해 대화합니다. 이미지와 최신 sensor facts만 근거로 삼으세요.
 현재 실행 지시는 directive, 이후에도 유지할 설정 변경만 operations에 넣습니다.
 방향은 화면 기준 오른쪽=[1,0], 왼쪽=[-1,0], 위=[0,-1], 아래=[0,1]. MOVE는 짧은 반복 이동이며 ttl_seconds 최대10.
-사냥시작은 Ctrl+1 또는 웹 버튼으로 실행합니다. 이동과 몬스터 타겟팅 없이 오른쪽 버튼 유지와 반복스킬을 함께 실행합니다.
+게임별 사냥·이동 동작은 해당 프로파일의 규칙을 따릅니다. 현재 프로파일에서 구현되지 않은 동작을 실행했다고 말하지 마세요.
 스킬 사용은 USE_SKILL, 버프 사용은 CAST_BUFF입니다. input.json의 바인딩으로 입력하며 track_id=null,direction=null,ttl_seconds=1을 권장합니다. 스킬 발동이나 적중을 완료했다고 주장하지 마세요.
 공격/수집/대화 대상은 facts에 있는 track_id만 사용합니다. 공격은 confirmed monster/hostile만, TAKE는 confirmed item만 가능합니다.
 미확정 객체나 없는 대상이면 action=NONE으로 설명/질문하세요. 근거 없는 이동 경로/좌표/이름을 만들지 마세요.

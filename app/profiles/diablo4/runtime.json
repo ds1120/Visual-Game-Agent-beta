@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "agent": {
+    "hud_mode": true,
+    "hud_interval": 0.2,
+    "reaction_interval": 0.05,
+    "minimap_reset_wait_seconds": 60.0
+  },
+  "buff": {
+    "match_threshold": 0.78
+  },
+  "scene": {
+    "min_interval": 3.0,
+    "stable_interval": 15.0,
+    "change_threshold": 8.0,
+    "tracking_interval": 0.1,
+    "request_timeout": 15.0,
+    "max_objects": 18,
+    "max_tokens": 384
+  }
+}

@@ -1,44 +1,97 @@
 "use client";
-import { useEffect, useState } from "react";
-import { Loader2, Save, RefreshCw } from "lucide-react";
-import { toast } from "sonner";
-import GameplayControls,{type CombatSettings,type SteeringSettings,type MappingSettings} from './gameplay-controls';
-type Skill={id:string;name:string;key:string;enabled:boolean;cooldown_ms:number};
-type MovementSkill={enabled:boolean;key:string};
-type InputSettings={version:number;tap_ms:number;require_foreground:boolean;bindings:Record<string,string>;movement:{mode:"keys"|"click";up:string;down:string;left:string;right:string};movement_skill?:MovementSkill;pointer_smoothing?:boolean;pointer_duration_ms?:number;attack_max_seconds?:number;attack_recheck_seconds?:number;attack_lost_grace_ms?:number;attack_skills?:Skill[];combat?:CombatSettings;disabled_actions?:string[]};
-type Region={visible:boolean;bbox:number[]|null;confidence:number};
-type MiniMap={enabled:boolean;bbox:number[]|null;player:number[];rotation_degrees:number;walkable_hsv:number[][][];wall_hsv?:number[][][];player_hsv?:number[][][];stuck_seconds?:number;stuck_threshold?:number;mapping?:MappingSettings;dark_floor?:number};
-type ClassRule={type:"monster"|"item"|"npc"|"obstacle";relation:"hostile"|"friendly"|"neutral"|"unknown";min_confidence:number};
-type Settings={class_rules?:Record<string,ClassRule>;detector?:{enabled:boolean;model_path:string;confidence:number};window_titles?:string[];hud_layout?:"classic"|"bars_hp_sp_mp";profile:string;revisions:Record<string,string>;input:InputSettings;navigation:{version:number;step_ms:number;step_fraction:number;obstacle_margin:number;minimap:MiniMap;steering?:SteeringSettings};buff_region:Region};
-const keys=["mouse_left","mouse_right",..."1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ".split(""),"SPACE","SHIFT","CTRL","ALT","UP","DOWN","LEFT","RIGHT"];
-const keyNames:Record<string,string>={mouse_left:"마우스 왼쪽",mouse_right:"마우스 오른쪽",SPACE:"Space"};
-const labels:Record<string,string>={ATTACK:"기본 공격",USE_SKILL:"대화 명령 스킬",CAST_BUFF:"버프 사용",USE_POTION:"물약",DODGE:"회피",TAKE:"아이템 줍기",INTERACT:"상호작용",MOVE:"이동 클릭"};
-function KeySelect({value,onChange,keyboardOnly=false}:{value:string;onChange:(value:string)=>void;keyboardOnly?:boolean}){return <select value={value} onChange={e=>onChange(e.target.value)}>{keys.filter(k=>!keyboardOnly||!k.startsWith("mouse_")).map(k=><option key={k} value={k}>{keyNames[k]??k}</option>)}</select>;}
-export default function GameSettings({profile,online,call}:{profile:string;online:boolean;call:(path:string,method?:string,body?:unknown)=>Promise<unknown>}){
- const [data,setData]=useState<Settings|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState("");
- async function load(){setBusy(true);setError("");try{setData(await call("/v1/game-settings") as Settings);}catch(e){setError(e instanceof Error?e.message:"설정 불러오기 실패");}finally{setBusy(false);}}
- useEffect(()=>{setData(null);if(online)void load();},[profile,online]);
- const updateInput=(patch:Partial<InputSettings>)=>setData(d=>d?{...d,input:{...d.input,...patch}}:d);
- const skills=data?.input.attack_skills??[];
- const movementSkill=data?.input.movement_skill??{enabled:false,key:'SPACE'};
- function changeMovementSkill(patch:Partial<MovementSkill>){updateInput({movement_skill:{...movementSkill,...patch},...(patch.enabled===true?{disabled_actions:(data?.input.disabled_actions??[]).filter(action=>action!=='DODGE')}:{})});}
- function count(value:number){const next=skills.slice(0,value);while(next.length<value){const n=next.length+1;next.push({id:`skill_${Date.now()}_${n}`,name:`공격 스킬 ${n}`,key:String(n<=9?n:0),enabled:true,cooldown_ms:1000});}updateInput({attack_skills:next,...(value>skills.length?{disabled_actions:(data?.input.disabled_actions??[]).filter(a=>a!=='USE_SKILL')}:{})});}
- function changeSkill(index:number,patch:Partial<Skill>){updateInput({attack_skills:skills.map((s,i)=>i===index?{...s,...patch}:s),...(patch.enabled===true?{disabled_actions:(data?.input.disabled_actions??[]).filter(a=>a!=='USE_SKILL')}:{})});}
- async function save(){if(!data)return;setBusy(true);setError("");try{await call("/v1/game-settings","POST",data);toast.success(`${profile} 설정을 저장·적용했습니다. 시작/재개를 누르세요.`);setData(await call("/v1/game-settings") as Settings);}catch(e){setError(e instanceof Error?e.message:"설정 저장 실패");}finally{setBusy(false);}}
- const m=data?.navigation.minimap;
- function mapPatch(patch:Partial<MiniMap>){setData(d=>d?{...d,navigation:{...d.navigation,minimap:{...d.navigation.minimap,...patch}}}:d);}
- function mapROI(i:number,value:number){const b=m?.bbox??[0,0,250,250];const r=[b[0]/10,b[1]/10,(b[2]-b[0])/10,(b[3]-b[1])/10];r[i]=value;mapPatch({bbox:[r[0]*10,r[1]*10,(r[0]+r[2])*10,(r[1]+r[3])*10]});}
- const box=data?.buff_region.bbox??[0,0,1000,1000];
- function roi(index:number,value:number){if(!data)return;const rect=[box[0]/10,box[1]/10,(box[2]-box[0])/10,(box[3]-box[1])/10];rect[index]=value;setData({...data,buff_region:{...data.buff_region,bbox:[rect[0]*10,rect[1]*10,(rect[0]+rect[2])*10,(rect[1]+rect[3])*10]}});}
- return <section className="game-settings" id="game-settings" aria-label="게임별 입력 및 이동 설정"><div className="input-monitor-heading"><h3>{profile} · 게임별 설정</h3><button className="text-button" disabled={busy||!online} onClick={()=>void load()}><RefreshCw size={14}/>설정 다시 불러오기</button></div>
- {error&&<p className="live-error" role="alert">{error}</p>}
- {!data?<p className="live-help">{busy?"게임 설정을 불러오는 중…":"Agent에 연결해 설정을 불러오세요."}</p>:<fieldset disabled={busy||!online} className="game-settings-fields"><h4>게임 캡처</h4><label className="setting-row">게임 창 제목<input aria-label="게임 창 제목 설정" value={(data.window_titles??[]).join(", ")} maxLength={500} placeholder="창 제목 일부 · 여러 제목은 쉼표로 구분" onChange={e=>setData({...data,window_titles:e.target.value.split(",").map(v=>v.trim()).filter(Boolean)})}/></label><p className="live-help">OpenCV + Qwen-VL</p><h4>플레이어 HUD</h4><label className="setting-row">측정 방식<select aria-label="HUD 측정 방식" value={data.hud_layout??"classic"} onChange={e=>setData({...data,hud_layout:e.target.value as Settings["hud_layout"]})}><option value="bars_hp_sp_mp">가로 바 · HP 파랑 / SP 분홍 / MP 보라</option><option value="classic">기존 게임 프로필 (원형 포함)</option></select></label><p className="live-help">방식을 바꾸면 이전 HP·SP·MP 영역을 다시 찾습니다. ESC를 누르면 즉시 입력을 중단하며, 시작/재개로 다시 실행합니다.</p><div className="settings-columns"><div><h4>공격 스킬</h4>{data.input.disabled_actions?.includes("USE_SKILL")&&skills.some(s=>s.enabled)&&<p className="live-error">공격 스킬 사용이 꺼져 있습니다. 스킬 활성화를 다시 체크하면 사용 차단도 해제됩니다.</p>}<label className="setting-row">등록할 키 개수<select aria-label="공격 스킬 키 개수" value={skills.length} onChange={e=>count(Number(e.target.value))}>{Array.from({length:13},(_,i)=><option key={i} value={i}>{i}개</option>)}</select></label><p className="live-help">확인된 적을 공격할 때 사용 간격이 지난 스킬부터 순서대로 전송합니다. 모두 대기 중이면 기본 공격 키를 사용합니다. 간격은 실제 게임 쿨타임에 맞춰 입력하세요.</p><div className="attack-skill-list">{skills.map((s,i)=><div className="attack-skill-row" key={s.id}><label className="skill-enable"><input type="checkbox" aria-label={`${i+1}번 공격 스킬 활성화`} checked={s.enabled} onChange={e=>changeSkill(i,{enabled:e.target.checked})}/>사용</label><label>스킬 이름<input aria-label={`${i+1}번 공격 스킬 이름`} value={s.name} maxLength={80} onChange={e=>changeSkill(i,{name:e.target.value})}/></label><label>적용 키<KeySelect value={s.key} onChange={key=>changeSkill(i,{key})}/></label><label>사용 간격(ms)<input type="number" min={150} max={60000} step={50} value={s.cooldown_ms} onChange={e=>changeSkill(i,{cooldown_ms:Number(e.target.value)})}/></label></div>)}</div><h4>지속 공격 · 오인식 중단</h4><label className="setting-row">대상별 최대 전투 시간(초)<input type="number" min={10} max={300} value={data.input.attack_max_seconds??60} onChange={e=>updateInput({attack_max_seconds:Number(e.target.value)})}/></label><label className="setting-row">Qwen 대상 재판정 간격(초)<input type="number" min={2} max={30} value={data.input.attack_recheck_seconds??8} onChange={e=>updateInput({attack_recheck_seconds:Number(e.target.value)})}/></label><label className="setting-row">대상 미탐지 대기 시간(ms)<input aria-label="공격 대상 미탐지 대기 시간" type="number" min={500} max={5000} step={100} value={data.input.attack_lost_grace_ms??2000} onChange={e=>updateInput({attack_lost_grace_ms:Number(e.target.value)})}/></label><p className="live-help">확정된 몬스터가 보이는 동안 반복 공격합니다. 잠깐 미탐지되면 이동을 보류하고 재탐색합니다. 설정 시간과 3회 연속 미탐지를 모두 충족하면 대상을 해제합니다. 재판정 중에는 해당 대상 공격을 멈춥니다. NPC·오인식·확신 부족·시간 초과는 대상이 사라질 때까지 공격에서 제외합니다. 실제 스킬 사용 간격은 위에서 설정하세요.</p><h4>기본 입력 키</h4><div className="binding-grid">{Object.entries(labels).map(([action,label])=><label key={action}>{label}<KeySelect value={data.input.bindings[action]} onChange={key=>updateInput({bindings:{...data.input.bindings,[action]:key}})}/></label>)}</div><label className="setting-row">키 누름 시간(ms)<input type="number" min={10} max={150} value={data.input.tap_ms} onChange={e=>updateInput({tap_ms:Number(e.target.value)})}/></label></div>
- <div><h4>이동</h4><label className="setting-row">이동 방식<select value={data.input.movement.mode} onChange={e=>updateInput({movement:{...data.input.movement,mode:e.target.value as "keys"|"click"}})}><option value="click">마우스 클릭 이동</option><option value="keys">방향 키 이동</option></select></label><label className="setting-row">중앙에서 클릭 거리(%)<input aria-label="이동 클릭 거리" type="number" min={3} max={45} step={1} value={Math.round(data.navigation.step_fraction*100)} onChange={e=>setData({...data,navigation:{...data.navigation,step_fraction:Number(e.target.value)/100}})}/></label><p className="live-help">게임 화면의 짧은 변 기준 3~45%입니다. 열린 통로에서는 설정 거리로 클릭하고, 꺾이는 통로에서는 검증된 회전 지점까지 이동합니다. HUD·캐릭터 주변의 불필요한 클릭은 제외합니다. 전투 접근·회피 거리는 별도입니다.</p><label className="setting-row">한 번 이동 유지 시간(ms)<input aria-label="한 번 이동 유지 시간" type="number" min={40} max={2000} step={10} value={data.navigation.step_ms} onChange={e=>setData({...data,navigation:{...data.navigation,step_ms:Number(e.target.value)}})}/></label><p className="live-help">40~2,000ms. 방향 키 이동에서는 키를 누르는 시간입니다. 마우스 클릭 이동에서는 클릭 후 대기 시간이며 이동 거리를 늘리지 않습니다. 미니맵 자동사냥은 이 대기 없이 목표 근접까지 같은 목표의 경로 클릭을 이어갑니다.</p>{data.input.movement.mode==="keys"&&<div className="binding-grid">{([['up','위'],['down','아래'],['left','왼쪽'],['right','오른쪽']] as const).map(([k,label])=><label key={k}>{label}<KeySelect keyboardOnly value={data.input.movement[k]} onChange={key=>updateInput({movement:{...data.input.movement,[k]:key}})}/></label>)}</div>}
- <h4>이동 스킬 · 막힘 복구</h4><label className="skill-enable"><input type="checkbox" aria-label="이동 스킬 사용" checked={movementSkill.enabled} onChange={e=>changeMovementSkill({enabled:e.target.checked})}/>이동 스킬 사용</label><label className="setting-row">이동 스킬 키<KeySelect value={movementSkill.key} onChange={key=>changeMovementSkill({key})}/></label><p className="live-help">이동이 정체되면 선택한 키를 한 번 누릅니다. 이후에도 움직이지 않으면 다른 길을 탐색합니다. 사용을 끄면 스킬 시도 없이 다른 길을 탐색합니다.</p>
- <h4>자연스러운 마우스 이동</h4><label className="skill-enable"><input type="checkbox" checked={data.input.pointer_smoothing??true} onChange={e=>updateInput({pointer_smoothing:e.target.checked})}/>좌표 사이를 부드럽게 보간</label><label className="setting-row">커서 이동 시간(ms)<input aria-label="마우스 보간 시간" type="number" min={40} max={400} step={10} value={data.input.pointer_duration_ms??120} onChange={e=>updateInput({pointer_duration_ms:Number(e.target.value)})}/></label><p className="live-help">시작·도착 속도를 완만하게 조절합니다. 120ms부터 시작하세요. 시간이 길수록 부드럽지만 클릭이 늦어집니다. 게임 창 전환·정지 시 보간을 취소합니다.</p>
- <GameplayControls disabled={data.input.disabled_actions} onDisabled={disabled_actions=>updateInput({disabled_actions})} combat={data.input.combat} steering={data.navigation.steering} mapping={m?.mapping} onCombat={patch=>updateInput({combat:{...data.input.combat,...patch}})} onSteering={patch=>setData({...data,navigation:{...data.navigation,steering:{...data.navigation.steering,...patch}}})} onMapping={patch=>mapPatch({mapping:{enabled:m?.mapping?.enabled??true,...m?.mapping,...patch}})}/>
- <h4>미니맵 · 막힘 회피</h4><label className="skill-enable"><input type="checkbox" checked={m?.enabled??false} onChange={e=>mapPatch({enabled:e.target.checked,bbox:m?.bbox??[0,0,250,250]})}/>미니맵 통로 검사 사용</label><p className="live-help">캡처 화면에서 미니맵 내부 영역을 지정하세요. 맵핑 사용 시 밝은 통로와 진한 장애물을 나누고 스크롤을 추적합니다. 실제 이동 전송 후 설정 시간 동안 진전이 없으면 그 방향을 잠시 피합니다. 통로 판단은 OpenCV가 처리하고 Qwen에는 요약만 전달합니다.</p>{m?.enabled&&<><div className="binding-grid">{["미니맵 X(%)","미니맵 Y(%)","미니맵 너비(%)","미니맵 높이(%)"].map((label,i)=>{const b=m.bbox??[0,0,250,250];return <label key={label}>{label}<input type="number" min={0} max={100} step={.1} value={(i<2?b[i]:b[i]-b[i-2])/10} onChange={e=>mapROI(i,Number(e.target.value))}/></label>;})}{["플레이어 X(%)","플레이어 Y(%)"].map((label,i)=><label key={label}>{label}<input type="number" min={10} max={90} value={m.player[i]*100} onChange={e=>mapPatch({player:m.player.map((v,j)=>j===i?Number(e.target.value)/100:v)})}/></label>)}</div><label className="setting-row">미니맵 회전 보정(도)<input type="number" min={-180} max={180} value={m.rotation_degrees} onChange={e=>mapPatch({rotation_degrees:Number(e.target.value)})}/></label><label className="setting-row">정체 확인 시간(초)<input type="number" min={1} max={15} value={m.stuck_seconds??3} onChange={e=>mapPatch({stuck_seconds:Number(e.target.value)})}/></label><label className="skill-enable"><input type="checkbox" checked={m.mapping?.enabled??false} onChange={e=>mapPatch({mapping:{...m.mapping,enabled:e.target.checked}})}/>지나온 길 기억 · 어두운 장애물 맵핑</label>{m.mapping?.enabled&&<label className="setting-row">어두운 지형 기준(V)<input type="number" min={30} max={190} value={m.dark_floor??85} onChange={e=>mapPatch({dark_floor:Number(e.target.value)})}/></label>}<p className="live-help">맵핑은 밝기 차이를 자동 조정합니다. 기준을 높이면 어두운 통로도 막힐 수 있습니다. 코너에서는 클릭 거리를 줄이고, 기록은 Agent 실행 중 유지됩니다. 아래 HSV 설정은 통로 색상 모드 또는 벽 윤곽선 모드에서 사용합니다. 벽 윤곽선 모드에서는 벽 색상을 지정합니다.</p><h4>통로 색상 · OpenCV HSV</h4><p className="live-help">H 0~179, S/V 0~255. 통로가 검출되지 않으면 이동을 차단합니다. 기본 밝기 범위가 게임 미니맵과 다르면 수정하세요.</p><div className="binding-grid">{["H","S","V"].map((label,i)=><label key={label}>{label} 최솟값 / 최댓값{[0,1].map(k=><input key={k} aria-label={`${label} ${k?'최대':'최소'}`} type="number" min={0} max={i?255:179} value={(m.mapping?.mode==='wall_lines'?(m.wall_hsv??[[[0,0,190],[179,70,255]]]):m.walkable_hsv)[0][k][i]} onChange={e=>{const r=(m.mapping?.mode==='wall_lines'?(m.wall_hsv??[[[0,0,190],[179,70,255]]]):m.walkable_hsv).map(v=>v.map(c=>[...c]));r[0][k][i]=Number(e.target.value);mapPatch(m.mapping?.mode==='wall_lines'?{wall_hsv:r,mapping:{...m.mapping,calibrated:false}}:{walkable_hsv:r});}}/>)}</label>)}</div></>}
 
- </div></div><div className="game-settings-footer"><span>현재 게임 프로필에 저장합니다. 저장 후 입력이 일시정지됩니다.</span><button className="button primary" onClick={()=>void save()}>{busy?<Loader2 size={15} className="spin"/>:<Save size={15}/>}게임 설정 저장·적용</button></div></fieldset>}
- </section>;
+import { useEffect, useState } from "react";
+
+import { Loader2, Save, RefreshCw } from "lucide-react";
+
+import { toast } from "sonner";
+
+import type {CombatSettings,SteeringSettings,MappingSettings} from './gameplay-controls';
+
+type Skill={id:string;name:string;key:string;enabled:boolean;cooldown_ms:number};
+
+type MovementSkill={enabled:boolean;key:string};
+
+type InputSettings={version:number;tap_ms:number;require_foreground:boolean;bindings:Record<string,string>;movement:{mode:"keys"|"click";up:string;down:string;left:string;right:string};movement_skill?:MovementSkill;pointer_smoothing?:boolean;pointer_duration_ms?:number;attack_max_seconds?:number;attack_recheck_seconds?:number;attack_lost_grace_ms?:number;attack_skills?:Skill[];combat?:CombatSettings;disabled_actions?:string[]};
+
+type Region={visible:boolean;bbox:number[]|null;confidence:number};
+
+type MiniMap={enabled:boolean;bbox:number[]|null;player:number[];rotation_degrees:number;walkable_hsv:number[][][];wall_hsv?:number[][][];player_hsv?:number[][][];stuck_seconds?:number;stuck_threshold?:number;mapping?:MappingSettings;dark_floor?:number};
+
+type ClassRule={type:"monster"|"item"|"npc"|"obstacle";relation:"hostile"|"friendly"|"neutral"|"unknown";min_confidence:number};
+
+type Settings={class_rules?:Record<string,ClassRule>;detector?:{enabled:boolean;model_path:string;confidence:number};window_titles?:string[];capture_fps?:number;hud_layout?:"classic"|"bars_hp_sp_mp";profile:string;revisions:Record<string,string>;input:InputSettings;navigation:{version:number;step_ms:number;step_fraction:number;obstacle_margin:number;minimap:MiniMap;steering?:SteeringSettings};buff_region:Region};
+
+const keys=["mouse_left","mouse_right",..."1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ".split(""),"SPACE","SHIFT","CTRL","ALT","UP","DOWN","LEFT","RIGHT"];
+
+const keyNames:Record<string,string>={mouse_left:"마우스 왼쪽",mouse_right:"마우스 오른쪽",SPACE:"Space"};
+
+
+function KeySelect({value,onChange,keyboardOnly=false}:{value:string;onChange:(value:string)=>void;keyboardOnly?:boolean}){return <select value={value} onChange={e=>onChange(e.target.value)}>{keys.filter(k=>!keyboardOnly||!k.startsWith("mouse_")).map(k=><option key={k} value={k}>{keyNames[k]??k}</option>)}</select>;}
+
+export default function GameSettings({profile,online,captureFps,call}:{profile:string;online:boolean;captureFps?:number;call:(path:string,method?:string,body?:unknown)=>Promise<unknown>}){
+
+ const [data,setData]=useState<Settings|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState("");
+
+ async function load(){setBusy(true);setError("");try{setData(await call("/v1/game-settings") as Settings);}catch(e){setError(e instanceof Error?e.message:"설정 불러오기 실패");}finally{setBusy(false);}}
+
+ useEffect(()=>{setData(null);if(online)void load();},[profile,online]);
+
+ const updateInput=(patch:Partial<InputSettings>)=>setData(d=>d?{...d,input:{...d.input,...patch}}:d);
+
+ const skills=data?.input.attack_skills??[];
+
+ const movementSkill=data?.input.movement_skill??{enabled:false,key:'SPACE'};
+
+ function changeMovementSkill(patch:Partial<MovementSkill>){updateInput({movement_skill:{...movementSkill,...patch},...(patch.enabled===true?{disabled_actions:(data?.input.disabled_actions??[]).filter(action=>action!=='DODGE')}:{})});}
+
+ function count(value:number){const next=skills.slice(0,value);while(next.length<value){const n=next.length+1;next.push({id:`skill_${Date.now()}_${n}`,name:`공격 스킬 ${n}`,key:String(n<=9?n:0),enabled:true,cooldown_ms:1000});}updateInput({attack_skills:next,...(value>skills.length?{disabled_actions:(data?.input.disabled_actions??[]).filter(a=>a!=='USE_SKILL')}:{})});}
+
+ function changeSkill(index:number,patch:Partial<Skill>){updateInput({attack_skills:skills.map((s,i)=>i===index?{...s,...patch}:s),...(patch.enabled===true?{disabled_actions:(data?.input.disabled_actions??[]).filter(a=>a!=='USE_SKILL')}:{})});}
+
+ async function save(){if(!data)return;setBusy(true);setError("");try{await call("/v1/game-settings","POST",data);toast.success(`${profile} 설정을 저장·적용했습니다. 시작/재개를 누르세요.`);setData(await call("/v1/game-settings") as Settings);}catch(e){setError(e instanceof Error?e.message:"설정 저장 실패");}finally{setBusy(false);}}
+
+ const m=data?.navigation.minimap;
+
+ function mapPatch(patch:Partial<MiniMap>){setData(d=>d?{...d,navigation:{...d.navigation,minimap:{...d.navigation.minimap,...patch}}}:d);}
+
+ function mapROI(i:number,value:number){const b=m?.bbox??[0,0,250,250];const r=[b[0]/10,b[1]/10,(b[2]-b[0])/10,(b[3]-b[1])/10];r[i]=value;mapPatch({bbox:[r[0]*10,r[1]*10,(r[0]+r[2])*10,(r[1]+r[3])*10]});}
+
+
+
+
+ const diablo4=data?.profile==="diablo4";
+ return <section className="game-settings" id="game-settings" aria-label="게임별 설정">
+ <div className="input-monitor-heading"><p className="live-help">현재 게임에 적용되는 설정만 표시합니다.</p><button className="text-button" disabled={busy||!online} onClick={()=>void load()}><RefreshCw size={14}/>다시 불러오기</button></div>
+ {error&&<p className="live-error" role="alert">{error}</p>}
+ {!data?<p className="live-help">{busy?"설정을 불러오는 중…":"Agent에 연결하면 설정이 표시됩니다."}</p>:<fieldset disabled={busy||!online} className="game-settings-fields">
+ <h4>게임 캡처</h4>
+ <label className="setting-row">게임 창 제목<input aria-label="게임 창 제목 설정" value={(data.window_titles??[]).join(", ")} maxLength={500} placeholder="창 제목 일부 · 여러 제목은 쉼표로 구분" onChange={e=>setData({...data,window_titles:e.target.value.split(",").map(v=>v.trim()).filter(Boolean)})}/></label>
+ <label className="setting-row">캡처 FPS<input aria-label="캡처 FPS 설정" type="number" min={15} max={120} step={5} value={data.capture_fps??captureFps??60} onChange={e=>setData({...data,capture_fps:Number(e.target.value)})}/></label>
+ {!diablo4&&<p className="live-help">이 게임의 이동·전투 기능은 구현 준비 중입니다. 동작 설정은 구현 후 표시됩니다.</p>}
+ {diablo4&&<>
+ <div className="settings-columns"><div><h4>반복스킬</h4>
+ <p className="live-help">Ctrl+1 사냥시작 또는 Ctrl+4 반복스킬에서 사용합니다. 활성화한 키를 설정 간격으로 반복합니다.</p>
+ {data.input.disabled_actions?.includes("USE_SKILL")&&<p className="live-error">스킬 입력이 차단되어 있습니다. 사용할 스킬을 활성화하면 차단이 해제됩니다.</p>}
+ <label className="setting-row">등록할 스킬 수<select aria-label="공격 스킬 키 개수" value={skills.length} onChange={e=>count(Number(e.target.value))}>{Array.from({length:13},(_,i)=><option key={i} value={i}>{i}개</option>)}</select></label>
+ <div className="attack-skill-list">{skills.map((s,i)=><div className="attack-skill-row" key={s.id}>
+ <label className="skill-enable"><input type="checkbox" aria-label={(i+1)+"번 공격 스킬 활성화"} checked={s.enabled} onChange={e=>changeSkill(i,{enabled:e.target.checked})}/>사용</label>
+ <label>스킬 이름<input aria-label={(i+1)+"번 공격 스킬 이름"} value={s.name} maxLength={80} onChange={e=>changeSkill(i,{name:e.target.value})}/></label>
+ <label>입력 키<KeySelect value={s.key} onChange={key=>changeSkill(i,{key})}/></label>
+ <label>사용 간격(ms)<input type="number" min={150} max={60000} step={50} value={s.cooldown_ms} onChange={e=>changeSkill(i,{cooldown_ms:Number(e.target.value)})}/></label>
+ </div>)}</div></div><div><h4>이동 · 막힘 복구</h4>
+ <label className="skill-enable"><input type="checkbox" aria-label="이동 스킬 사용" checked={movementSkill.enabled} onChange={e=>changeMovementSkill({enabled:e.target.checked})}/>이동이 막히면 이동 스킬 사용</label>
+ {movementSkill.enabled&&<label className="setting-row">이동 스킬 키<KeySelect value={movementSkill.key} onChange={key=>changeMovementSkill({key})}/></label>}
+ <p className="live-help">Ctrl+3 이동에서 사용합니다. 기본 이동은 화면 화살표·미니맵 경로를 따라 마우스 왼버튼을 유지합니다.</p>
+ </div></div>
+ <details className="settings-advanced"><summary>고급 설정 · 미니맵 보정과 입력 시간</summary><div>
+ <h4>미니맵 보정</h4><p className="live-help">게임 해상도나 미니맵 크기가 바뀐 경우에만 조정하세요.</p>
+ <div className="binding-grid">{["미니맵 X(%)","미니맵 Y(%)","미니맵 너비(%)","미니맵 높이(%)"].map((label,i)=>{const b=m?.bbox??[0,0,250,250];return <label key={label}>{label}<input type="number" min={0} max={100} step={.1} value={(i<2?b[i]:b[i]-b[i-2])/10} onChange={e=>mapROI(i,Number(e.target.value))}/></label>;})}</div>
+ <label className="setting-row">지도 이동 투영 배율<input type="number" min={2} max={40} step={.5} value={m?.mapping?.screen_pixels_per_map_pixel??12} onChange={e=>mapPatch({mapping:{enabled:m?.mapping?.enabled??true,...m?.mapping,screen_pixels_per_map_pixel:Number(e.target.value)}})}/></label>
+ <label className="setting-row">벽 가장자리 제외 폭(px)<input type="number" min={0} max={5} step={1} value={m?.mapping?.wall_margin_px??1} onChange={e=>mapPatch({mapping:{enabled:m?.mapping?.enabled??true,...m?.mapping,wall_margin_px:Number(e.target.value)}})}/></label>
+ <label className="setting-row">통로 여유 폭(px)<input type="number" min={2} max={30} value={m?.mapping?.preferred_clearance_px??14} onChange={e=>mapPatch({mapping:{enabled:m?.mapping?.enabled??true,...m?.mapping,preferred_clearance_px:Number(e.target.value)}})}/></label>
+ <label className="setting-row">키 누름 시간(ms)<input type="number" min={10} max={150} step={5} value={data.input.tap_ms} onChange={e=>updateInput({tap_ms:Number(e.target.value)})}/></label>
+ </div></details></>}
+ <div className="live-actions"><button className="button primary" disabled={busy} onClick={()=>void save()}>{busy?<Loader2 size={15} className="spin"/>:<Save size={15}/>}설정 저장·적용</button><span className="live-help">저장 시 실행이 중단됩니다.</span></div>
+ </fieldset>}</section>;
 }
