@@ -5,6 +5,7 @@ import logging
 import threading
 import time
 
+log = logging.getLogger(__name__)
 
 class PhysicalMouse:
     def __init__(self):
@@ -29,7 +30,7 @@ class PhysicalMouse:
                 self.native_warning=False
             if flags&2:self.held.discard(device)
         if flags&3:
-            print(f'[MOUSE RAW] 장치={device} 왼버튼={"누름" if flags&1 else "해제"}',flush=True)
+            log.debug('[MOUSE RAW] 장치=%s 왼버튼=%s',device,'누름' if flags&1 else '해제')
 
     def reconcile(self,native_down,now):
         recovered=[]
@@ -53,9 +54,9 @@ class PhysicalMouse:
                 self.native_down_seen=False
                 self.up_since=None
         for device in recovered:
-            print(f'[MOUSE RAW] 장치={device} 왼버튼=해제 · Windows 상태로 누락 복구',flush=True)
+            log.debug('[MOUSE RAW] 장치=%s 왼버튼=해제 · Windows 상태로 누락 복구',device)
         if unavailable:
-            print('[MOUSE RAW] Windows 버튼 누름 상태 미확인 · 게임 내 입력 접근/권한 확인 필요 · 자동 재개 보류',flush=True)
+            log.debug('[MOUSE RAW] Windows 버튼 누름 상태 미확인 · 게임 내 입력 접근/권한 확인 필요 · 자동 재개 보류')
 
     def down(self,fallback):
         with self.lock:
@@ -98,7 +99,7 @@ class PhysicalMouse:
             device=Device(1,2,0x100|0x2000,window)  # INPUTSINK + DEVNOTIFY
             if not u.RegisterRawInputDevices(ctypes.byref(device),1,ctypes.sizeof(Device)):
                 raise ctypes.WinError(ctypes.get_last_error())
-            print('[MOUSE RAW] 실제 마우스 장치별 버튼 감시 시작',flush=True)
+            log.debug('[MOUSE RAW] 실제 마우스 장치별 버튼 감시 시작')
             self.ready.set()
             message=wintypes.MSG()
             while True:
@@ -120,7 +121,7 @@ class PhysicalMouse:
                 threading.Event().wait(.002)
         except Exception as exc:
             self.error=str(exc)
-            logging.getLogger(__name__).error('[MOUSE] raw input unavailable: %s',exc)
+            log.debug('[MOUSE] raw input unavailable: %s',exc)
         finally:
             self.ready.set()
             if window:u.DestroyWindow(window)

@@ -3,6 +3,7 @@ import asyncio
 import configparser
 import copy
 import json
+import logging
 import re
 import time
 import math
@@ -500,7 +501,7 @@ class MainAgent(VisualAgent):
                     guard.sessions.pop(focus,None)
                 guard.focus=None
             if not was_down:
-                print('[MOUSE] 왼버튼 유지 · 자동 이동/타겟/공격/모든 스킬 일시 정지')
+                logging.getLogger(__name__).debug('[MOUSE] 왼버튼 유지 · 자동 이동/타겟/공격/모든 스킬 일시 정지')
                 await self.scheduler.clear()
                 await self.scheduler._cancel_execution()
                 await self.scheduler.executor.release_held_attack()
@@ -511,7 +512,7 @@ class MainAgent(VisualAgent):
                 self._manual_skill_resume_until=0
             return True
         self._stationary_manual_move_until=0
-        if was_down:print('[MOUSE] 왼버튼 해제 · 자동 이동/사냥/스킬 재개')
+        if was_down:logging.getLogger(__name__).debug('[MOUSE] 왼버튼 해제 · 자동 이동/사냥/스킬 재개')
         return False
 
     def _stationary_hold_command(self,target=None,track_id=None):
@@ -1198,7 +1199,7 @@ class MainAgent(VisualAgent):
                     guide=self._stabilize_arrow(guide)
                 if now-getattr(self,'_arrow_diagnostic_at',-1e9)>=2:
                     self._arrow_diagnostic_at=now
-                    print(f'[ARROW MATCH] detector=shape-v2 detected={detected} move_ready={guide is not None} '
+                    logging.getLogger(__name__).debug(f'[ARROW MATCH] detector=shape-v2 detected={detected} move_ready={guide is not None} '
                           f'score={diagnostic.get("best_score",0):.3f} candidates={diagnostic.get("candidates",0)} '
                           f'method={diagnostic.get("method","template")} proposed={diagnostic.get("proposed",0)} '
                           f'latency={diagnostic.get("latency_ms",0)}ms')
