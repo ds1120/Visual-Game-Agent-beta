@@ -1,6 +1,6 @@
 # 미니맵 중앙 경로 이동
 
-non_YOLO 공통 이동 엔진을 사용합니다. 디아블로 IV는 첨부 화면에 맞춘 우측 상단 미니맵을 사용합니다.
+GameBot 공통 이동 엔진을 사용합니다. 디아블로 IV는 첨부 화면에 맞춘 우측 상단 미니맵을 사용합니다.
 기본 ROI는 전체 캡처 기준 X 82%, Y 4.2%, 너비 16.8%, 높이 19.5%입니다. 다른 화면 비율·UI 배율에서는 게임 설정의 미니맵 ROI를 조정해야 합니다.
 
 ## 판단과 이동
@@ -56,24 +56,24 @@ II는 ROI와 벽 색상이 미설정이며 맵핑을 꺼둡니다. 윤곽선이 
 - 기록은 Agent 실행 중 유지하고 일시정지 후에도 유지합니다. Agent 재시작 후 불러오는 영구 세계 지도는 아닙니다.
 - 지도 전환·회전·줌 변경·스크롤 연결 실패 시 새 구간으로 시작합니다. 서로 다른 지역을 같은 지도에 잘못 붙이지 않기 위한 처리입니다.
 - 진한 색은 지형 장애물 후보입니다. 실제 게임의 색상·반투명 미니맵·아이콘·미니맵 중심 변화에 따라 오인식할 수 있습니다.
-- non_YOLO 일반 이동은 게임에 관계없이 미니맵이 꺼졌거나 미확인·미보정이면 보류합니다. HP 긴급 후퇴에는 짧은 화면 검사 이동을 허용하지만 현재 지도에서 벽으로 확인한 방향은 검사합니다.
+- GameBot 일반 이동은 게임에 관계없이 미니맵이 꺼졌거나 미확인·미보정이면 보류합니다. HP 긴급 후퇴에는 짧은 화면 검사 이동을 허용하지만 현재 지도에서 벽으로 확인한 방향은 검사합니다.
 - 첨부 화면을 기준으로 ROI를 설정했으나 실제 게임의 이동 정확도와 브라우저 화면은 이번 작업에서 확인하지 않았습니다.
 
 ## 변경 파일
 
-`app/core/minimap_memory.py`, `app/core/local_navigation.py`, `app/ai/non_yolo_agent.py`, `app/ai/visual_agent.py`,
+`app/core/minimap_memory.py`, `app/core/local_navigation.py`, `app/ai/main_agent.py`, `app/ai/visual_agent.py`,
 `app/profiles/runtime_settings.py`, `app/profiles/diablo4/navigation.json`,
 `Visual-Agent-Lab-local/app/minimap-mapping.tsx`, `Visual-Agent-Lab-local/app/live-agent.tsx`, `Visual-Agent-Lab-local/app/game-settings.tsx`,
-`tests/test_minimap_memory.py`, `tests/test_non_yolo.py`, `tests/test_web_bridge.py`, `BASIC_COMBAT.md`, `README_BUFF_MOVEMENT_RECOVERY.md`, 이 문서와 웹 빌드 결과입니다.
+`tests/test_minimap_memory.py`, `tests/test_main_agent.py`, `tests/test_web_bridge.py`, `BASIC_COMBAT.md`, `README_BUFF_MOVEMENT_RECOVERY.md`, 이 문서와 웹 빌드 결과입니다.
 
 ## 이전 구현의 검증 기록
 
-- `python -`로 `test_non_yolo.py`, `test_minimap_memory.py`, `test_bar_navigation.py`, `test_web_bridge.py`, `test_attack_hold.py`의 unittest 묶음 실행: 136개 실행, `OK (skipped=1)`. Windows 심볼릭 링크 생성 권한이 없는 하위 검사만 건너뛰었습니다. 같은 테스트의 HTTP 페이지·세션·상태 확인은 수행했습니다.
+- `python -`로 `test_main_agent.py`, `test_minimap_memory.py`, `test_bar_navigation.py`, `test_web_bridge.py`, `test_attack_hold.py`의 unittest 묶음 실행: 136개 실행, `OK (skipped=1)`. Windows 심볼릭 링크 생성 권한이 없는 하위 검사만 건너뛰었습니다. 같은 테스트의 HTTP 페이지·세션·상태 확인은 수행했습니다.
 - 기존 웹 테스트의 8% 이동거리 기대값을 현재 설정거리 유지 규칙으로 수정했습니다. UTF-8 실험 기록의 읽기 인코딩도 명시했습니다.
 - 웹 폴더에서 `npm run typecheck`, `npm test`, `npm run build`: 타입 검사 성공, 웹 테스트 4개 통과, 빌드 성공. 500kB 초과 번들 경고가 있습니다.
 - 합성 미니맵 반복 측정: 지도 갱신 약 8.5ms, 경로 계산 약 20.1ms. 실제 게임에서 측정한 성능은 아닙니다.
 
-적용하려면 non_YOLO Agent를 재시작하고 `http://127.0.0.1:8766/#game`을 새로고침하세요. 외부 Site 페이지는 배포하지 않았습니다.
+적용하려면 GameBot Agent를 재시작하고 `http://127.0.0.1:8766/#game`을 새로고침하세요. 외부 Site 페이지는 배포하지 않았습니다.
 
 이번 중앙 경로·전투 거리 변경의 설정과 최종 검증 결과는 `GAMEPLAY_SETUP.md`에 기록합니다. 실제 게임의 장애물 탈출 성공률은 이번 작업에서 측정하지 않았습니다.
 

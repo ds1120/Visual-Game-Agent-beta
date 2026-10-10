@@ -131,6 +131,13 @@ class ScreenCapture:
         return self._client_region(self._cached_hwnd) if self.can_input() else None
 
     @staticmethod
+    def control_shortcuts_down():
+        down = lambda key: bool(ctypes.windll.user32.GetAsyncKeyState(key) & 0x8000)
+        if not (down(0x11) and down(0x10)):
+            return set()
+        return {number for number in range(1, 6) if down(0x30 + number)}
+
+    @staticmethod
     def emergency_stop_held():
         return bool(ctypes.windll.user32.GetAsyncKeyState(0x1B) & 0x8000)
 

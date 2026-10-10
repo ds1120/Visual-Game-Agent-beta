@@ -1,5 +1,9 @@
 """Resolve only profile-approved keys at the execution boundary."""
 def binding_for_command(settings, command):
+    if command.action_type=='INTERACT' and command.source=='SCREEN_SPACE_PROMPT':
+        return 'SPACE'
+    if command.action_type=='ATTACK' and command.reason in {'STATIONARY_RIGHT_CLICK','STATIONARY_POST_DEATH'}:
+        return 'mouse_right'
     if command.action_type=='DODGE' and command.source=='NAVIGATION_ESCAPE':
         skill=settings.get('movement_skill',{})
         if not skill.get('enabled',False):raise ValueError('이동 스킬이 등록되지 않았거나 비활성 상태입니다.')

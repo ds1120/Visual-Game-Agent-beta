@@ -3,9 +3,11 @@
 from __future__ import annotations
 import asyncio, ctypes, json, math, os, secrets, threading, time
 from ctypes import wintypes
+from dataclasses import replace
 
 from app.controller.input_bindings import binding_for_command
 from app.controller.pointer_motion import smooth_point
+from app.core.control_hotkeys import begin_bot_keys, end_bot_keys
 
 PROTOCOL = "VGA_BLE_1"
 SPECIAL = {
@@ -153,9 +155,12 @@ class ESP32InputController:
         self.attack_held = False
         self._hold_task = None
         self._hold_capable = False
+        self._move_hold_capable = False
+        self.last_error = None
         try:
             capabilities = self.transport.probe(timeout=10, require_ready=True)
             self._hold_capable = capabilities.get('hold_attack') is True
+            self._move_hold_capable = capabilities.get('hold_move') is True
             if capabilities.get('ready') is not True:
                 raise ConnectionError(
                     "Windows에서 VisualAgent-ESP32를 BLE 페어링하세요."
@@ -172,10 +177,13 @@ class ESP32InputController:
             if op in {"STOP", "STATUS", "RELEASE", "END_TAP"}
             else lambda: epoch == self._epoch and self.capture.can_input()
         )
+        def request():
+            bot_keys=begin_bot_keys(args[1:]) if op=='KEY' else []
+            try:return self.transport.request(op,*args,guard=guard)
+            finally:
+                if bot_keys:end_bot_keys(bot_keys,args[0])
         try:
-            reply = await asyncio.to_thread(
-                self.transport.request, op, *args, guard=guard
-            )
+            reply = await asyncio.to_thread(request)
         except asyncio.CancelledError:
             self._epoch += 1
             raise
@@ -191,6 +199,11 @@ class ESP32InputController:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         if was_held:
+            await self._send('RELEASE')
+
+    async def release_move(self):
+        if getattr(self,'move_held',False):
+            self.move_held=False
             await self._send('RELEASE')
 
     async def _refresh_attack_hold(self):
@@ -214,9 +227,11 @@ class ESP32InputController:
 
     async def _point(self, target, epoch, *, fast=False):
         if target is None or not all(math.isfinite(x) and 0 <= x <= 1 for x in target):
+            self.last_error = '커서 이동: 화면 밖이거나 잘못된 목표 좌표'
             return False
         region = self.capture.input_region()
         if region is None:
+            self.last_error = '커서 이동: 게임 입력 영역 없음'
             return False
         l, t, r, b = region
         sx = round(l + target[0] * (r - l - 1))
@@ -225,8 +240,8 @@ class ESP32InputController:
         start_at = time.monotonic()
         settings = self.settings_provider()
         duration = settings.get("pointer_duration_ms", 120)/1000 if settings.get("pointer_smoothing", True) else 0
-        if fast:duration=min(duration,.04)
-        deadline = start_at + 2
+        if fast:duration=0
+        deadline = start_at + (.25 if fast else 2)
         for _ in range(160):
             if (
                 epoch != self._epoch
@@ -234,6 +249,7 @@ class ESP32InputController:
                 or time.monotonic() > deadline
                 or self.capture.input_region() != region
             ):
+                self.last_error = '커서 이동 중 중단/포커스 변경/입력 영역 변경/보정 시간 제한'
                 return False
             x, y = self.cursor.position()
             elapsed = time.monotonic() - start_at
@@ -245,7 +261,9 @@ class ESP32InputController:
             dx, dy = tx-x, ty-y
 
             def step(v):
-                return max(-80, min(80, int(v / 2) or (1 if v > 0 else -1))) if v else 0
+                limit=127 if fast else 80
+                divisor=2  # Feedback damping avoids Windows acceleration overshoot.
+                return max(-limit, min(limit, int(v / divisor) or (1 if v > 0 else -1))) if v else 0
 
             # Track intermediate targets; feedback settles the end point despite Windows acceleration.
             if dx or dy:
@@ -253,7 +271,8 @@ class ESP32InputController:
                     await self._send("MOVE", max(-80,min(80,dx)), max(-80,min(80,dy)))
                 else:
                     await self._send("MOVE", step(dx), step(dy))
-            await asyncio.sleep(0.012)
+            await asyncio.sleep(.003 if fast else .012)
+        self.last_error = '커서 이동: 목표 위치에 도달하지 못함'
         return False
 
     async def _wait(self, ms, epoch):
@@ -266,6 +285,8 @@ class ESP32InputController:
 
     async def _tap(self, key, target=None, *, fast=False):
         epoch = self._epoch
+        if key.startswith('mouse_'):
+            await self.release_move()
         if not self.capture.can_input():
             return False
         if target is not None and not await self._point(target, epoch, fast=fast):
@@ -280,7 +301,7 @@ class ESP32InputController:
                 await self._send("KEY", ms, hid_key(key), 0)
             return await self._wait(ms, epoch)
         finally:
-            if self.attack_held and epoch == self._epoch and self.capture.can_input():
+            if (self.attack_held or getattr(self,'move_held',False)) and epoch == self._epoch and self.capture.can_input():
                 await self._send('END_TAP')
             else:
                 await self.release_attack()
@@ -298,6 +319,34 @@ class ESP32InputController:
 
     async def move(self, c):
         await self.release_attack()
+        if c.maintain_move:
+            if not self._move_hold_capable:
+                self.last_error = 'ESP32 펌웨어 1.2 업로드 필요: 기존 펌웨어는 왼버튼 유지를 지원하지 않습니다.'
+                await self.release_move()
+                return False
+            self.last_error = None
+            epoch=self._epoch
+            if not self.capture.can_input():
+                self.last_error = '왼버튼 유지: 게임 포커스 없음'
+                await self.release_move()
+                return False
+            if not await self._point(c.target,epoch,fast=True):
+                self.last_error = self.last_error or '왼버튼 유지: 커서 이동 실패'
+                await self.release_move()
+                return False
+            # Queue TTL must not expire solely because BLE cursor positioning
+            # took longer. Recheck the current arrow, focus and epoch before HOLD.
+            current=replace(c,expires_at=time.monotonic()+.35)
+            if (epoch!=self._epoch or not self.capture.can_input()
+                    or not getattr(self,'hold_validator',lambda _:True)(current)):
+                owner=getattr(getattr(self,'hold_validator',None),'__self__',None)
+                self.last_error = getattr(owner,'_input_block_reason',None) or '왼버튼 유지: 커서 이동 후 최신 화살표/포커스/중단 상태 검증 실패'
+                await self.release_move()
+                return False
+            await self._send('HOLD',1,350)
+            self.move_held=True
+            self._move_clicked=True
+            return True
         if not self.capture.can_input() or c.direction is None:
             return False
         s = self.settings_provider()
@@ -362,6 +411,7 @@ class ESP32InputController:
 
     async def stop(self, c):
         self._epoch += 1
+        await self.release_move()
         await self.release_attack()
         await self._send("STOP")
         self._move_clicked = False
@@ -369,5 +419,6 @@ class ESP32InputController:
 
     async def close(self):
         self._epoch += 1
+        await self.release_move()
         await self.release_attack()
         await asyncio.to_thread(self.transport.close)

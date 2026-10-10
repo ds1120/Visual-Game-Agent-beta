@@ -45,7 +45,7 @@ def route_terrain_image(roi, guide=None):
     return cv2.inpaint(roi,overlay,3,cv2.INPAINT_TELEA)
 
 
-def orange_route_target(mask,player,origin,visits,cell=4,destination=None):
+def orange_route_target(mask,player,origin,visits,cell=4,destination=None,*,return_path=False,direction=None):
     """Follow the remaining connected guide; the pin only breaks equal-length ties."""
     ys,xs=np.where(mask>0)
     if not len(xs):return None
@@ -63,6 +63,10 @@ def orange_route_target(mask,player,origin,visits,cell=4,destination=None):
             if value<distance.get((x,y),float('inf')):
                 distance[(x,y)]=value;parent[(x,y)]=node;heapq.heappush(queue,(value,(x,y)))
     candidates=[p for p,d in distance.items() if d>=8 and np.linalg.norm(np.array(p)-player)>=6]
+    if direction is not None:
+        heading=np.asarray(direction,float);heading/=max(float(np.linalg.norm(heading)),1e-6)
+        candidates=[p for p in candidates if float((np.array(p)-player)@heading)
+                    /max(float(np.linalg.norm(np.array(p)-player)),1e-6)>=.5]
     if not candidates:return None
     local_destination=None if destination is None else np.asarray(destination)-origin
     def score(point):
@@ -70,8 +74,14 @@ def orange_route_target(mask,player,origin,visits,cell=4,destination=None):
         pin_distance=0 if local_destination is None else np.linalg.norm(np.array(point)-local_destination)
         # Passed guide segments disappear in-game. The far end of the remaining
         # connected guide is authoritative; an old pin cannot shorten/reverse it.
+        if direction is not None and local_destination is not None:
+            return (-pin_distance,distance[point],-visits.get(key,0))
         return (distance[point],-visits.get(key,0),-pin_distance)
     end=max(candidates,key=score)
+    if return_path:
+        path=[end]
+        while path[-1] in parent:path.append(parent[path[-1]])
+        return np.array(path[::-1],float)
     # The map planner checks bends and limits click distance independently.
     # Keep the connected guide's far end as the destination.
     return np.array(end,float)

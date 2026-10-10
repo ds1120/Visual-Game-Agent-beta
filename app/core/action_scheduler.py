@@ -3,6 +3,7 @@
 from __future__ import annotations
 import asyncio
 import time
+from dataclasses import replace
 from app.core.action_command import ActionCommand
 
 
@@ -18,6 +19,7 @@ class ActionScheduler:
         self._decision_generation = 0
         self.emergency_until = 0.0
         self._hold_watch_task = None
+        self._pending_manual_skill = False
 
     async def start(self):
         if self._running:
@@ -36,6 +38,7 @@ class ActionScheduler:
 
     async def stop(self):
         self._running = False
+        await self.executor.release_held_move()
         if self._hold_watch_task:
             self._hold_watch_task.cancel()
             await asyncio.gather(self._hold_watch_task, return_exceptions=True)
@@ -65,6 +68,8 @@ class ActionScheduler:
             return
         renew=getattr(self.executor,'renew_held_attack',None)
         if callable(renew):renew(command)
+        if command.action_type=='MOVE' and self._pending_manual_skill:
+            return  # Renew the hold, preserving the queued skill until execution.
         active=self.executor.active_command
         if (active is not None and active.action_type=='MOVE' and active.move_clicks>1
                 and command.action_type not in {'MOVE','CAST_BUFF','USE_POTION'}):
@@ -72,6 +77,7 @@ class ActionScheduler:
         self._decision_generation += 1
         await self.clear()
         await self._queue.put((self._decision_generation, command))
+        self._pending_manual_skill = command.source=='MANUAL_SKILL'
 
     async def submit_emergency(self, command):
         if not self._running or command.is_expired() or command.action_type != "STOP" and not self._is_cooldown_ready(command):
@@ -81,11 +87,18 @@ class ActionScheduler:
         self.emergency_until = time.monotonic() + max(0.15, command.duration_ms / 1000)
         await self.clear()
         await self._cancel_execution()
+        if command.source=='SCREEN_SPACE_PROMPT':
+            # Cancelling an in-flight serial transaction can consume its TTL.
+            # The executor still verifies current focus and visible prompt.
+            now=time.monotonic()
+            command=replace(command,execute_at=now,expires_at=now+.5)
+            self.emergency_until=now+.5
         await self._queue.put((self._decision_generation, command))
 
     async def _run_loop(self):
         while self._running:
             generation, command = await self._queue.get()
+            self._pending_manual_skill = False
             try:
                 while self._running and command.execute_at > time.monotonic():
                     if generation != self._decision_generation:
@@ -130,6 +143,7 @@ class ActionScheduler:
         return now - self._last_execution.get(self.cooldown_key(command), -1e9) >= command.cooldown
 
     async def clear(self):
+        self._pending_manual_skill = False
         while not self._queue.empty():
             try:
                 self._queue.get_nowait()

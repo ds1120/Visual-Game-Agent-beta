@@ -117,7 +117,7 @@ class HumanMemory:
 class QwenScene:
     def __init__(self, profile_dir, min_interval=3, stable_interval=15, change_threshold=8, max_objects=8):
         self.lock=threading.RLock()
-        self.memory=HumanMemory(Path(profile_dir)/'non_yolo_memory.json')
+        self.memory=HumanMemory(Path(profile_dir)/'scene_memory.json')
         self.min_interval=max(2,float(min_interval))
         self.stable_interval=max(self.min_interval,float(stable_interval))
         self.change_threshold=float(change_threshold)

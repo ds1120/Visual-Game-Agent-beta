@@ -18,4 +18,4 @@ class SceneSource:
 
     def detect(self, frame):
         if not self.enabled:return []
-        raise RuntimeError('Scene detection belongs to NonYoloAgent; no YOLO path is available')
+        raise RuntimeError('Scene detection belongs to MainAgent; no YOLO path is available')

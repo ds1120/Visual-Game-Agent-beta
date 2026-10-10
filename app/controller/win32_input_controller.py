@@ -151,6 +151,9 @@ class Win32InputController:
             self._key('mouse_right', True)
             self.attack_held = False
 
+    async def release_move(self):
+        if 'mouse_left' in self._held:self._key('mouse_left',True)
+
     async def _tap(self, key, target=None, *, fast=False):
         epoch = getattr(self, "_epoch", 0)
         if not self.capture.can_input():
@@ -179,6 +182,16 @@ class Win32InputController:
 
     async def move(self, command):
         await self.release_attack()
+        if command.maintain_move:
+            epoch=getattr(self,'_epoch',0)
+            if (not self.capture.can_input() or not await self._point(command.target,fast=True)
+                    or epoch!=getattr(self,'_epoch',0) or not self.capture.can_input()
+                    or not getattr(self,'hold_validator',lambda _:True)(command)):
+                await self.release_move()
+                return False
+            if 'mouse_left' not in self._held:self._key('mouse_left')
+            self._move_clicked=True
+            return True
         if not self.capture.can_input() or command.direction is None:
             return False
         settings = self.settings_provider()

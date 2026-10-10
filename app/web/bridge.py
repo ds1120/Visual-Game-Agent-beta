@@ -251,16 +251,23 @@ class AgentBridge:
         if not isinstance(request_id, str) or not 1 <= len(request_id) <= 80:
             raise ValueError("대화 요청 ID 필요")
         if await self.agent.handle_control(message):
+            mode_reply = None
+            if self.agent._processing_halted:
+                mode_reply = "사냥 중단 · 모든 작업 일시정지. 버튼 또는 단축키로 재개하세요."
+            elif getattr(self.agent, '_stationary_hunt_mode', False):
+                mode_reply = "제자리사냥 · 몹을 감지·타겟팅하고 주공격 스킬(오른쪽 클릭)만 사용합니다."
+            elif getattr(self.agent, '_screen_guide_enabled', False):
+                mode_reply = "이동 · 빨간 방향 표시와 흰 점을 함께 인식해 예정 진행 방향을 설정합니다. 미니맵 통로를 확인한 뒤 이동합니다."
             self.agent.emit_web_event(
                 "chat_result",
                 request_id=request_id,
-                reply=("예정 진행 방향을 다시 선정합니다. 다른 통로가 있으면 이전 방향을 피하고, 최신 미니맵 확인 후 적용합니다." if "".join(message.lower().split()).rstrip(".!?") in {"/replan","예정진행방향변경","예정진행방향바꿔줘"} else "공격 없이 이동합니다. 주황색 선·핀을 우선 따라가고, 둘 다 없으면 미니맵 통로를 탐색합니다." if getattr(self.agent,"_move_only",False) and self.agent._hunt_active else "이동하며 사냥합니다. 주황색 선·핀을 우선 따라가고, 둘 다 없으면 미니맵 통로를 탐색합니다. 적을 만나면 공격을 우선하고 전투 후 이동을 이어갑니다." if getattr(self.agent,"_follow_orange_route",False) and self.agent._hunt_active else "지속 사냥을 시작합니다. HP와 객체 확인 후 적을 공격하고, 적이 없으면 장애물을 피하며 짧게 탐색 이동합니다." if self.agent._hunt_active else "제어 명령을 적용했습니다."),
+                reply=(mode_reply or ("예정 진행 방향을 다시 선정합니다. 다른 통로가 있으면 이전 방향을 피하고, 최신 미니맵 확인 후 적용합니다." if "".join(message.lower().split()).rstrip(".!?") in {"/replan","예정진행방향변경","예정진행방향바꿔줘"} else "공격 없이 이동합니다. 주황색 선·핀을 우선 따라가고, 둘 다 없으면 미니맵 통로를 탐색합니다." if getattr(self.agent,"_move_only",False) and self.agent._hunt_active else "이동하며 사냥합니다. 주황색 선·핀을 우선 따라가고, 둘 다 없으면 미니맵 통로를 탐색합니다. 적을 만나면 공격을 우선하고 전투 후 이동을 이어갑니다." if getattr(self.agent,"_follow_orange_route",False) and self.agent._hunt_active else "지속 사냥을 시작합니다. HP와 객체 확인 후 적을 공격하고, 적이 없으면 장애물을 피하며 짧게 탐색 이동합니다." if self.agent._hunt_active else "제어 명령을 적용했습니다.")),
                 saved=[],
                 directive={"action": "NONE"},
             )
         else:
             if self.agent._processing_halted:
-                raise ValueError("HP바 미검출로 처리 중단 상태입니다. 화면을 확인하고 시작/재개하세요.")
+                raise ValueError((self.agent._halt_reason or "모든 작업 일시정지") + ". 버튼 또는 단축키로 재개하세요.")
             if self.agent._latest_frame is None:
                 raise ValueError("게임 창을 캡처한 뒤 대화할 수 있습니다.")
             try:

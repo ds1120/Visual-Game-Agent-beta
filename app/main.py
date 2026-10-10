@@ -4,7 +4,7 @@ import asyncio
 import configparser
 import argparse
 
-from app.ai.non_yolo_agent import NonYoloAgent as VisualAgent
+from app.ai.main_agent import MainAgent as VisualAgent
 from app.capture.screen_capture import ScreenCapture
 from app.controller.input_controller_factory import create_input_controller
 from app.core.action_executor import ActionExecutor
@@ -124,11 +124,13 @@ async def main() -> None:
         },
     )
 
-    agent.movement_test_mode=cfg.getboolean('AGENT','movement_test_mode',fallback=False)
+    agent.hud_mode=cfg.getboolean('AGENT','hud_mode',fallback=True)
+    # Keep the proven movement path identical with HUD reading on or off.
+    agent.movement_test_mode=True
     agent.minimap_memory.registration_reset_seconds=max(2,min(300,cfg.getfloat('AGENT','minimap_reset_wait_seconds',fallback=30)))
     if agent.movement_test_mode:
         agent._move_only=True
-        print('[MODE] 이동 테스트 · HP/SP/MP/버프/스킬 검사 중지 · 미니맵 이동만 실행')
+        print('[MODE] 미니맵 이동 · HUD 읽기 ' + ('켜짐 (이동과 독립)' if agent.hud_mode else '꺼짐'))
     bridge = None
     if args.web:
         from app.web.bridge import AgentBridge

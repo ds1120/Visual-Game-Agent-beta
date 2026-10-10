@@ -17,6 +17,7 @@ from app.core.local_navigation import LocalNavigator, minimap_mask
 from app.core.action_mapper import ActionMapper
 from app.core.game_state import HUDState
 from app.core.intent import Intent
+from app.core.control_hotkeys import watch_control_hotkeys
 from app.core.game_statistics import GameStatistics
 from app.vision.buff_monitor import BuffMonitor
 from app.vision.qwen_vl_client import QwenVLClient, VLResponseError
@@ -594,9 +595,6 @@ class VisualAgent:
         while self._running:
             if not self._focus_work_allowed():
                 await asyncio.sleep(.1);continue
-            if self._processing_halted:
-                await asyncio.sleep(0.1)
-                continue
             start = time.monotonic()
             try:
                 epoch = self._epoch
@@ -638,6 +636,33 @@ class VisualAgent:
             await asyncio.sleep(
                 max(0.001, 1 / self.capture_fps - (time.monotonic() - start))
             )
+
+    async def _hud_read_loop(self):
+        """Read HUD for display without stopping or changing movement inputs."""
+        last = -1
+        loop = asyncio.get_running_loop()
+        while self._running:
+            start = time.monotonic()
+            if (self._focus_work_allowed() and not self._processing_halted
+                    and self._latest_frame is not None and self._frame_seq != last):
+                last = self._frame_seq
+                epoch, identity = self._epoch, self._frame_identity
+                try:
+                    hud = await loop.run_in_executor(
+                        self._hud_executor, self._analyze_hud, self._latest_frame
+                    )
+                    if (epoch == self._epoch and identity == self._frame_identity
+                            and self._focus_work_allowed() and not self._processing_halted):
+                        self._latest_hud_state = hud
+                        self._hud_ms = (time.monotonic() - start) * 1000
+                        self._hud_at = time.monotonic()
+                        self._hud_ready = hud.health_valid
+                        self._hud_waiting = not hud.health_valid
+                except Exception:
+                    self._hud_ready = False
+                    self._hud_waiting = True
+                    log.exception('[OpenCV] HUD read failed; movement continues')
+            await asyncio.sleep(max(0.001, self.hud_interval - (time.monotonic() - start)))
 
     async def _hud_loop(self):
         last = -1
@@ -740,7 +765,7 @@ class VisualAgent:
             return self.yolo.detect(frame)
 
     def _prepare_live_vision(self, document):
-        # The non_YOLO branch never constructs or warms a detector model.
+        # The GameBot branch never constructs or warms a detector model.
         return None
 
     def _apply_live_vision(self, document, prepared=None):
@@ -954,6 +979,7 @@ class VisualAgent:
             "input": {
                 "basic_attack_mode": self._docs['input.json'].get('basic_attack_mode', 'tap'),
                 "attack_held": bool(getattr(getattr(executor, '_input', None), 'attack_held', False)),
+                "move_held": getattr(executor,'_held_move_command',None) is not None,
                 "bindings": dict(self._docs["input.json"]["bindings"]),
                 "attack_skills": self._docs["input.json"].get("attack_skills", []),
                 "movement": dict(self._docs["input.json"]["movement"]),
@@ -1349,7 +1375,8 @@ class VisualAgent:
     async def _statistics_loop(self):
         try:
             while self._running:
-                await asyncio.to_thread(self.statistics.flush)
+                if not self._processing_halted:
+                    await asyncio.to_thread(self.statistics.flush)
                 await asyncio.sleep(1)
         finally:
             await asyncio.to_thread(self.statistics.flush)
@@ -1392,6 +1419,34 @@ class VisualAgent:
             except (ValueError, OSError) as exc:
                 log.warning(f"[PROFILE] edit rejected; keeping last settings: {exc}")
             await asyncio.sleep(0.5)
+
+    async def _control_shortcuts_loop(self):
+        loop = asyncio.get_running_loop()
+        queue = asyncio.Queue()
+        stop = threading.Event()
+        def pressed(number):
+            if not stop.is_set():loop.call_soon_threadsafe(queue.put_nowait, number)
+        def watch():
+            try:
+                watch_control_hotkeys(stop, self._foreground, pressed)
+            except Exception:
+                log.exception('[HOTKEY] shortcut listener failed')
+        thread = threading.Thread(target=watch, name='game-control-hotkeys', daemon=True)
+        thread.start()
+        try:
+            while self._running:
+                await self._handle_control_shortcut(await queue.get())
+        finally:
+            stop.set()
+            await asyncio.to_thread(thread.join, .5)
+
+    async def _handle_control_shortcut(self, number):
+        if not self._foreground():return
+        message = {1: '/hunt', 2: '/stop', 3: '이동',
+                   4: '반복스킬', 5: '제자리사냥'}.get(number)
+        if message is not None:
+            log.info('[HOTKEY] Ctrl+Shift+%s -> %s', number, message)
+            await self.handle_control(message)
 
     async def _emergency_loop(self):
         while self._running:
@@ -1884,12 +1939,15 @@ class VisualAgent:
         if getattr(self,'movement_test_mode',False):
             disabled={'_hud_loop','_yolo_loop','_calibration_loop','_learning_loop',
                       '_emergency_loop','_combat_recheck_loop','_navigation_replan_loop'}
-            workers=[self._idle_sensor_loop if worker.__name__ in disabled else
+            workers=[self._hud_read_loop if worker.__name__=='_hud_loop' and getattr(self,'hud_mode',False) else
+                     self._idle_sensor_loop if worker.__name__ in disabled else
                      self._movement_test_loop if worker.__name__=='_action_loop' else worker
                      for worker in workers]
         if self._console_enabled:
             workers += [self._console_loop]
             self._start_console()
+        if callable(getattr(getattr(self, 'capture', None), 'control_shortcuts_down', None)):
+            workers.append(self._control_shortcuts_loop)
         self._tasks = [
             asyncio.create_task(worker(), name=worker.__name__) for worker in workers
         ]

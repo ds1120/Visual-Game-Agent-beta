@@ -37,6 +37,7 @@ class ActionCommand:
     skill_id: str | None = None
     maintain_attack: bool = False
     move_clicks: int = 1
+    maintain_move: bool = False
 
     def is_expired(self) -> bool:
         """

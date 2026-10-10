@@ -8,7 +8,7 @@ from unittest.mock import patch, AsyncMock, Mock
 
 import numpy as np
 
-from app.ai.non_yolo_agent import NonYoloAgent
+from app.ai.main_agent import MainAgent
 from app.ai.visual_agent import VisualAgent
 from app.core.action_command import ActionCommand
 from app.core.local_navigation import LocalNavigator
@@ -19,8 +19,219 @@ from app.core.action_scheduler import ActionScheduler
 
 
 class NavigationHandoffTests(unittest.TestCase):
+    def test_move_button_only_clicks_arrows_and_never_processes_other_navigation(self):
+        for arrow in (None,{'arrow_tip':(.6,.4),'arrow_direction':(0.,-1.)}):
+            agent=self.agent();agent._epoch=1;agent._running=True
+            agent._paused=False;agent._processing_halted=False;agent._move_only=True
+            agent._fresh=lambda:True;agent._foreground=lambda:True
+            agent._update_screen_move_guide=Mock(return_value=arrow)
+            agent._space_prompt_tick=AsyncMock(side_effect=AssertionError('No Space in move-only mode'))
+            agent._review_missing_navigation_route=Mock(side_effect=AssertionError('No minimap planning'))
+            agent._recover_rejected_movement=Mock(side_effect=AssertionError('No recovery'))
+            agent._continue_navigation=Mock(side_effect=AssertionError('No retained route'))
+            agent.scheduler=SimpleNamespace(submit=AsyncMock())
+            async def finish(_):agent._running=False
+            with patch('app.ai.main_agent.asyncio.sleep',new=finish):
+                asyncio.run(agent._movement_test_loop())
+            if arrow:self.assertEqual(agent.scheduler.submit.await_args.args[0].source,'SCREEN_ARROW_MOVE')
+            else:agent.scheduler.submit.assert_not_awaited()
+
+    def test_planned_target_prioritizes_arrow_over_conflicting_orange_route(self):
+        agent=self.agent();agent._screen_guide_enabled=True
+        agent._screen_guide_seen_at=time.monotonic()
+        agent._screen_move_guide={'arrow_direction':(0.,-1.),'dots':[(.7,.7)]}
+        memory=agent.minimap_memory
+        memory.orange_mask=np.zeros_like(memory.mask);memory.orange_mask[96,96:150]=255
+        state={'valid':True}
+        agent._apply_orange_route_display(state,memory)
+        self.assertEqual(state['planned_source'],'black_arrow')
+        self.assertAlmostEqual(state['planned_target'][0],.5)
+        self.assertLess(state['planned_target'][1],.5)
+
+    def test_arrow_display_does_not_consult_even_aligned_orange_route(self):
+        agent=self.agent();agent._screen_guide_enabled=True
+        agent._screen_guide_seen_at=time.monotonic()
+        agent._screen_move_guide={'arrow_direction':(0.,-1.),'dots':[]}
+        memory=agent.minimap_memory
+        memory.orange_mask=np.zeros_like(memory.mask);memory.orange_mask[50:97,96]=255
+        state={'valid':True}
+        with patch('app.ai.main_agent.orange_route_target',side_effect=AssertionError('Arrow display must ignore map route')):
+            agent._apply_orange_route_display(state,memory)
+        np.testing.assert_allclose(state['planned_target'],[.5,.5-135/12/192])
+        self.assertEqual(state['planned_source'],'black_arrow')
+        self.assertEqual(len(state['route']),2)
+
+    def test_fresh_arrow_click_is_not_vetoed_by_minimap_projection(self):
+        agent=self.agent();agent._epoch=1
+        agent.movement_test_mode=True;agent._paused=False;agent._processing_halted=False
+        agent._move_only=True;agent._hunt_active=True;agent._screen_guide_enabled=True
+        agent._fresh=lambda:True;agent._foreground=lambda:True
+        agent._screen_guide_seen_at=time.monotonic()
+        guide={'arrow_tip':(.6,.4),'arrow_direction':(0.,-1.)}
+        agent._screen_move_guide=guide
+        agent.navigator._map_clear=Mock(return_value=False)
+        agent.navigator.click_is_clear=Mock(side_effect=AssertionError('Arrow clicks bypass object veto'))
+        agent._world_click_exclusions=Mock(side_effect=AssertionError('Arrow clicks bypass click-zone veto'))
+        agent.scene.scene='menu'
+        agent._local_map_current=Mock(return_value=False)
+        with patch('app.ai.main_agent.random.uniform',side_effect=[75.]):
+            move=agent._arrow_move_command(guide)
+        self.assertTrue(agent.can_execute(move))
+        agent.navigator._map_clear.assert_not_called()
+        agent._local_map_current.assert_not_called()
+        self.assertFalse(agent.can_execute(replace(move,target=(.8,.4))))
+        self.assertFalse(agent.can_execute(replace(move,target=(.6,.4-40./1080))))
+        self.assertFalse(agent.can_execute(replace(move,target=(.6,.4+75./1080))))
+        agent._screen_guide_seen_at-=1
+        self.assertFalse(agent.can_execute(move))
+        agent._screen_guide_seen_at=time.monotonic()
+        agent._foreground=lambda:False
+        self.assertFalse(agent.can_execute(move))
+        agent._foreground=lambda:True
+        agent._paused=True
+        self.assertFalse(agent.can_execute(move))
+
+    def test_planned_display_follows_orange_bends_instead_of_click_projection(self):
+        agent=self.agent();agent._screen_guide_enabled=True
+        memory=agent.minimap_memory
+        memory.orange_mask=np.zeros_like(memory.mask)
+        memory.orange_mask[96,96:131]=255
+        memory.orange_mask[60:97,130]=255
+        state={'valid':True,'route':[[.5,.5],[.2,.9]],'actual_click_target':[.2,.9]}
+        agent._apply_orange_route_display(state,memory)
+        self.assertEqual(state['planned_source'],'orange_route')
+        np.testing.assert_allclose(state['planned_target'],[130/192,60/192])
+        self.assertEqual(state['actual_click_target'],[.2,.9])
+        for x,y in state['route']:
+            self.assertEqual(memory.orange_mask[round(y*192),round(x*192)],255)
+
+    def test_missing_orange_line_clears_unrelated_planned_display(self):
+        agent=self.agent();agent._screen_guide_enabled=True
+        memory=agent.minimap_memory;memory.orange_mask=np.zeros_like(memory.mask)
+        state={'valid':True,'route':[[.5,.5],[.2,.9]],'planned_target':[.2,.9]}
+        agent._apply_orange_route_display(state,memory)
+        self.assertIsNone(state['planned_target'])
+        self.assertEqual(state['route'],[])
+
+    def test_blocked_destination_continuation_has_defined_guide(self):
+        for guided in (False,True):
+            agent=self.agent();agent._epoch=1
+            memory=agent.minimap_memory
+            memory.position=np.array([96.,96.]);memory.goal=np.array([130.,96.])
+            memory.snapshot=Mock(return_value={'valid':True})
+            memory.destination_blocked=Mock(return_value=True)
+            agent._screen_guide_enabled=guided
+            agent._screen_move_guide={'target':(.6,.5)} if guided else None
+            agent._mapped_click_navigation=Mock(return_value=True)
+            agent._check_map_goal_arrival=Mock(return_value=False)
+            agent._blocked_goal_sample=(1,memory.last_update-.1)
+            agent.emit_web_event=Mock()
+            agent.scheduler=SimpleNamespace(executor=SimpleNamespace(active_command=None),running=False)
+            agent.click_journey=SimpleNamespace(SOURCES=ClickJourney.SOURCES,pending={},current=object(),
+                record={'epoch':1,'segment':memory.segment,'goal_id':1,'goal':memory.goal.copy()},
+                _release=Mock())
+            move=ActionCommand('MOVE',10,time.monotonic(),source='HUNT_EXPLORE',decision_epoch=1)
+            self.assertFalse(agent._continue_navigation(move))
+            if guided:
+                self.assertIsNone(memory.goal)
+            else:self.assertTrue(agent._wall_probe_pending)
+
+    def test_arrow_click_offsets_use_native_pixels_and_fast_click(self):
+        for width,height in ((960,600),(1920,1200)):
+            agent=self.agent();agent._epoch=7
+            agent._latest_frame=np.zeros((height,width,3),np.uint8)
+            guide={'arrow_tip':(.6,.4),'arrow_direction':(0.,-1.)}
+            with patch('app.ai.main_agent.random.uniform',side_effect=[75.]):
+                move=agent._arrow_move_command(guide)
+            delta=(np.array(move.target)-np.array(guide['arrow_tip']))*[width,height]
+            expected=np.array([.1*width,-.1*height]);expected/=np.linalg.norm(expected)
+            np.testing.assert_allclose(delta,expected*75,atol=1e-6)
+            self.assertEqual(move.source,'SCREEN_ARROW_MOVE')
+            self.assertEqual(move.duration_ms,0)
+            self.assertEqual(move.cooldown,.05)
+            self.assertEqual(move.decision_epoch,7)
+
+    def test_arrow_move_loop_bypasses_old_destination_planning(self):
+        agent=self.agent();agent._epoch=1
+        agent._running=True;agent._paused=False;agent._processing_halted=False
+        agent._hunt_active=True;agent._fresh=lambda:True;agent._foreground=lambda:True
+        agent._screen_guide_enabled=True
+        guide={'arrow_tip':(.6,.4),'arrow_direction':(0.,-1.),'direction':(0.,-1.)}
+        agent._screen_move_guide=guide
+        agent._update_screen_move_guide=Mock(return_value=guide)
+        agent._review_missing_navigation_route=Mock();agent._recover_rejected_movement=Mock()
+        agent._movement_hunt_enabled=lambda:False
+        agent._continue_navigation=Mock(side_effect=AssertionError('Old destination must not intercept arrow click'))
+        agent.scheduler=SimpleNamespace(submit=AsyncMock())
+        async def finish(_):agent._running=False
+        with patch('app.ai.main_agent.asyncio.sleep',new=finish):
+            asyncio.run(agent._movement_test_loop())
+        self.assertEqual(agent.scheduler.submit.call_args.args[0].source,'SCREEN_ARROW_MOVE')
+
+    def test_missing_screen_guides_use_orange_before_random(self):
+        for orange in (False,True):
+            agent=self.agent()
+            agent._running=True;agent._paused=False;agent._processing_halted=False
+            agent._epoch=1
+            agent._hunt_active=True;agent._fresh=lambda:True;agent._foreground=lambda:True
+            agent._screen_guide_enabled=True
+            agent.minimap_memory.orange_mask=np.full((20,20),255 if orange else 0,np.uint8)
+            agent._update_screen_move_guide=Mock(return_value=None)
+            agent._random_move_heading=Mock(return_value=(0.,1.))
+            agent._review_missing_navigation_route=Mock();agent._recover_rejected_movement=Mock()
+            agent._try_navigation_escape=AsyncMock(return_value=False)
+            agent._movement_hunt_enabled=lambda:False
+            agent.scheduler=SimpleNamespace(submit=AsyncMock())
+            agent._continue_navigation=Mock(return_value=True)
+            async def finish(_):agent._running=False
+            with patch('app.ai.main_agent.asyncio.sleep',new=finish):
+                asyncio.run(agent._movement_test_loop())
+            if orange:
+                agent._random_move_heading.assert_not_called()
+                agent._continue_navigation.assert_called_once()
+                self.assertIsNone(agent._hunt_preferred_direction)
+            else:
+                agent._random_move_heading.assert_called_once()
+                self.assertEqual(agent._continue_navigation.call_args.args[0].direction,(0.,1.))
+                self.assertIsNone(agent._screen_move_guide)
+
+    def test_screen_guide_projects_breadcrumb_to_verified_map_target(self):
+        agent=self.agent()
+        agent.click_journey=ClickJourney()
+        agent._screen_guide_enabled=True
+        agent.movement_test_mode=True;agent._follow_orange_route=True
+        agent.minimap_memory.orange_mask=np.full((192,192),255,np.uint8)
+        agent._screen_move_guide={'target':(.6,.4),'direction':(1.,-1.)}
+        agent._hunt_preferred_direction=(1.,-1.)
+        agent.minimap_memory.position=np.array([96.,96.])
+        agent.minimap_memory.suggest=Mock(return_value=((1.,0.),.1,.8))
+        settings=dict(agent._docs['navigation.json'],step_fraction=.3)
+        move=ActionCommand('MOVE',10,time.monotonic(),source='HUNT_EXPLORE',direction=(1.,0.))
+        with patch('app.ai.main_agent.game_viewport',return_value=(0,0,1920,1080)):
+            result=agent._prepare_navigation(move,settings)
+        call=agent.minimap_memory.suggest.call_args
+        np.testing.assert_allclose(call.kwargs['target_world'],[112.,87.])
+        self.assertFalse(call.kwargs['explore'])
+        self.assertIn('흰 점',result.reason)
+        self.assertFalse(agent.minimap_memory.lock_current_heading)
+        self.assertTrue(agent.minimap_memory.follow_orange_route)
+
+    def test_blocked_screen_guide_does_not_substitute_exploration_direction(self):
+        agent=self.agent()
+        agent.click_journey=ClickJourney()
+        agent._screen_guide_enabled=True
+        agent._screen_move_guide={'target':(.6,.4),'direction':(1.,-1.)}
+        agent.minimap_memory.position=np.array([96.,96.])
+        agent.minimap_memory.suggest=Mock(return_value=None)
+        settings=dict(agent._docs['navigation.json'],step_fraction=.3)
+        move=ActionCommand('MOVE',10,time.monotonic(),source='HUNT_EXPLORE',direction=(1.,0.))
+        result=agent._prepare_navigation(move,settings)
+        self.assertEqual(result.action_type,'STOP')
+        self.assertEqual(result.reason,'SCREEN_GUIDE_BLOCKED')
+        self.assertTrue(all(not call.kwargs['explore'] for call in agent.minimap_memory.suggest.call_args_list))
+
     def agent(self):
-        agent=NonYoloAgent.__new__(NonYoloAgent)
+        agent=MainAgent.__new__(MainAgent)
         agent._move_only=False
         agent.profile=SimpleNamespace(name='generic')
         agent._hud_probe_command=None
@@ -116,13 +327,15 @@ class NavigationHandoffTests(unittest.TestCase):
             agent._scene_scan_task=None
             with patch.object(VisualAgent,'handle_control',new=AsyncMock(return_value=True)) as control:
                 self.assertTrue(asyncio.run(agent.handle_control(message)))
-            control.assert_awaited_once_with('/hunt')
+            control.assert_not_awaited()
             self.assertFalse(agent._move_only)
             self.assertTrue(agent._movement_hunt_enabled())
             self.assertTrue(agent._repeat_skills_hunting)
 
     def test_repeat_skill_button_command_enables_interval_mode(self):
         agent=self.agent();agent.profile.name='diablo4'
+        agent._processing_halted=False
+        agent._foreground=lambda:True
         agent._epoch=0
         agent._paused=False;agent._move_only=True;agent._hunt_active=True
         agent.click_journey=ClickJourney();agent.emit_web_event=Mock()
@@ -132,11 +345,36 @@ class NavigationHandoffTests(unittest.TestCase):
         with patch.object(VisualAgent,'handle_control',new=AsyncMock(return_value=True)):
             self.assertTrue(asyncio.run(agent.handle_control('반복 스킬')))
         self.assertTrue(agent._manual_skill_mode)
-        self.assertTrue(agent._stationary_skill_mode)
-        self.assertFalse(agent._repeat_skills_hunting)
-        self.assertEqual(agent.scheduler.submit_emergency.call_args.args[0].action_type,'STOP')
-        self.assertFalse(agent.can_execute(ActionCommand('MOVE',10,time.monotonic())))
-        self.assertFalse(agent._move_only)
+        self.assertFalse(agent._stationary_skill_mode)
+        self.assertFalse(getattr(agent,'_repeat_skills_hunting',False))
+        agent.scheduler.submit_emergency.assert_not_awaited()
+        self.assertTrue(agent._move_only)
+        self.assertEqual(agent._current_function_status()[0],'이동 + 반복스킬')
+
+    def test_combined_commands_preserve_existing_state_in_both_orders(self):
+        for first,second in (('/move','/repeat-skills'),('/repeat-skills','/move')):
+            agent=self.agent();agent.profile.name='diablo4'
+            agent._paused=False;agent._processing_halted=False;agent._hunt_active=True
+            agent._move_only=first=='/move'
+            agent._manual_skill_mode=first=='/repeat-skills'
+            agent._stationary_skill_mode=first=='/repeat-skills'
+            agent._epoch=17;agent._manual_skill_pending_at=123
+            agent._space_prompt_wait_until=456
+            route=object();agent._directive=route
+            agent.emit_web_event=Mock()
+            agent.scheduler=SimpleNamespace(submit_emergency=AsyncMock())
+            with patch.object(VisualAgent,'handle_control',new=AsyncMock()) as restart:
+                for message in (second,first,second):
+                    self.assertTrue(asyncio.run(agent.handle_control(message)))
+                restart.assert_not_awaited()
+            self.assertTrue(agent._manual_skill_mode)
+            self.assertTrue(agent._move_only)
+            self.assertFalse(agent._stationary_skill_mode)
+            self.assertEqual(agent._epoch,17)
+            self.assertEqual(agent._manual_skill_pending_at,123)
+            self.assertEqual(agent._space_prompt_wait_until,456)
+            self.assertIs(agent._directive,route)
+            agent.scheduler.submit_emergency.assert_not_awaited()
 
     def test_hunt_rotation_uses_basic_and_every_enabled_registered_skill(self):
         agent=self.agent()
@@ -321,7 +559,7 @@ class NavigationHandoffTests(unittest.TestCase):
         agent._foreground=lambda:True;agent._fresh=lambda:True
         agent.scheduler=SimpleNamespace(submit=AsyncMock())
         skill=ActionCommand('DODGE',80,time.monotonic(),source='NAVIGATION_ESCAPE',target=(.95,.5))
-        with patch('app.ai.non_yolo_agent.asyncio.sleep',new=AsyncMock()) as delay:
+        with patch('app.ai.main_agent.asyncio.sleep',new=AsyncMock()) as delay:
             asyncio.run(agent._dodge_after_movement_skill(skill))
         delay.assert_awaited_once_with(1)
         dodge=agent.scheduler.submit.call_args.args[0]
@@ -329,7 +567,7 @@ class NavigationHandoffTests(unittest.TestCase):
         self.assertEqual(dodge.source,'NAVIGATION_DODGE')
         self.assertEqual(dodge.target,skill.target)
         agent.scheduler.submit.reset_mock();agent._epoch=1
-        with patch('app.ai.non_yolo_agent.asyncio.sleep',new=AsyncMock()):
+        with patch('app.ai.main_agent.asyncio.sleep',new=AsyncMock()):
             asyncio.run(agent._dodge_after_movement_skill(skill))
         agent.scheduler.submit.assert_not_awaited()
 

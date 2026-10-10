@@ -1,7 +1,5 @@
 # Controller·전투·Qwen 활성화 대기 변경
 
-수정 대상은 `C:\ai\project\Visual-Game-Agent-non_YOLO`입니다.
-
 ## 동작
 
 - 게임 창 비활성 동안 Qwen 시작 보정, 자동 장면 분석, 사용자 명령 분석을 대기합니다. 창 활성화 후 최신 캡처로 명령을 처리합니다. 대기 중 중단·설정 변경으로 무효화된 명령은 취소합니다. 이미 전송한 HTTP 요청을 중간에 취소하는 기능은 아닙니다.
@@ -13,17 +11,17 @@
 
 ## 변경 파일
 
-- `app/ai/non_yolo_agent.py`, `app/ai/visual_agent.py`
+- `app/ai/main_agent.py`, `app/ai/visual_agent.py`
 - `app/vision/click_safety.py`, `app/vision/buff_monitor.py`, `app/vision/qwen_vl_client.py`
 - `app/core/local_navigation.py`, `app/core/action_executor.py`, `app/core/action_scheduler.py`
 - `app/controller/esp32_input_controller.py`, `app/controller/win32_input_controller.py`
 - `Visual-Agent-Lab-local/app/input-monitor.tsx`, `Visual-Agent-Lab-local/app/controller-input.css`, `Visual-Agent-Lab-local/app/live-agent.tsx`
-- `tests/test_non_yolo.py`, `BASIC_COMBAT.md`, `README_BUFF_MOVEMENT_RECOVERY.md`
+- `tests/test_main_agent.py`, `BASIC_COMBAT.md`, `README_BUFF_MOVEMENT_RECOVERY.md`
 - 웹 빌드 결과 `Visual-Agent-Lab-local/dist/`
 
 ## 실행·검증 결과
 
-- `python -m unittest discover -s tests -p test_non_yolo.py -q`: 42개 통과.
+- `python -m unittest discover -s tests -p test_main_agent.py -q`: 42개 통과.
 - `python -`로 관련 unittest 묶음을 실행: 65개 통과. 공격 유지·ESP32·이동·전투 관련 테스트를 포함합니다.
 - `python -`로 2300×1800 화면에 실제 등록 버프 이미지를 삽입하여 축소 검색 확인: 통과.
 - 웹 폴더에서 `npm run typecheck`: 성공.
