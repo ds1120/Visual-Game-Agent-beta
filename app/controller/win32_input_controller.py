@@ -6,6 +6,7 @@ import ctypes
 import os
 import math
 import time
+from dataclasses import replace
 from ctypes import wintypes
 from app.controller.input_bindings import binding_for_command
 from app.controller.pointer_motion import smooth_point
@@ -154,13 +155,15 @@ class Win32InputController:
     async def release_move(self):
         if 'mouse_left' in self._held:self._key('mouse_left',True)
 
-    async def _tap(self, key, target=None, *, fast=False):
+    async def _tap(self, key, target=None, *, fast=False, command=None):
         epoch = getattr(self, "_epoch", 0)
         if not self.capture.can_input():
             return False
         if target is not None and not await self._point(target, fast=fast):
             return False
         if epoch != getattr(self, "_epoch", 0) or not self.capture.can_input():
+            return False
+        if command is not None and not getattr(self,'hold_validator',lambda _:True)(command):
             return False
         try:
             self._key(key)
@@ -178,7 +181,7 @@ class Win32InputController:
             n = math.hypot(dx, dy)
             if n > 0:
                 target = (0.5 + dx / n * 0.12, 0.5 + dy / n * 0.12)
-        return await self._tap(binding_for_command(settings, command), target)
+        return await self._tap(binding_for_command(settings, command), target,command=command)
 
     async def move(self, command):
         await self.release_attack()
@@ -228,7 +231,8 @@ class Win32InputController:
             if c.target is not None and not await self._point(c.target):
                 await self.release_attack()
                 return False
-            if epoch != self._epoch or not self.capture.can_input() or c.is_expired() or not getattr(self, 'hold_validator', lambda _: True)(c):
+            current=replace(c,expires_at=time.monotonic()+.5) if c.reason=='STATIONARY_HOLD' else c
+            if epoch != self._epoch or not self.capture.can_input() or current.is_expired() or not getattr(self, 'hold_validator', lambda _: True)(current):
                 await self.release_attack()
                 return False
             if not self.attack_held:

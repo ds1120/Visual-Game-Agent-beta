@@ -80,12 +80,23 @@ class ActionScheduler:
         self._pending_manual_skill = command.source=='MANUAL_SKILL'
 
     async def submit_emergency(self, command):
-        if not self._running or command.is_expired() or command.action_type != "STOP" and not self._is_cooldown_ready(command):
+        stopping = command.action_type == 'STOP'
+        if stopping:
+            command=replace(command,execute_at=time.monotonic(),expires_at=None)
+        if not stopping and (not self._running or command.is_expired() or not self._is_cooldown_ready(command)):
             return
         self._decision_generation += 1
         # A normal sensor decision must not replace an unconsumed emergency.
         self.emergency_until = time.monotonic() + max(0.15, command.duration_ms / 1000)
         await self.clear()
+        if stopping:
+            # Cancel the old task without awaiting its serial-release cleanup.
+            # The controller's STOP invalidates in-flight epochs and releases
+            # all inputs independently of a stuck old action's finally block.
+            task=self._execution_task
+            if task and not task.done():task.cancel()
+            await self.executor.execute(command)
+            return
         await self._cancel_execution()
         if command.source=='SCREEN_SPACE_PROMPT':
             # Cancelling an in-flight serial transaction can consume its TTL.
@@ -138,7 +149,8 @@ class ActionScheduler:
     def _is_cooldown_ready(self, command):
         now = time.monotonic()
         timed_skill=bool(command.skill_id and command.source in {'MANUAL_SKILL','MOVEMENT_HUNT','ATTACK_ROTATION'})
-        if not timed_skill and (command.action_type == "ATTACK" or command.skill_id) and now - self._last_execution.get("combat_input", -1e9) < 0.15:
+        stationary_hold=command.maintain_attack and command.reason in {'STATIONARY_HOLD','STATIONARY_POST_DEATH','STATIONARY_TARGET_GRACE','STATIONARY_MODE_HOLD'}
+        if not timed_skill and not stationary_hold and (command.action_type == "ATTACK" or command.skill_id) and now - self._last_execution.get("combat_input", -1e9) < 0.15:
             return False
         return now - self._last_execution.get(self.cooldown_key(command), -1e9) >= command.cooldown
 

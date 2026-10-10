@@ -39,6 +39,15 @@ class SpacePromptDetectionTests(unittest.TestCase):
     def test_permanent_bottom_hud_keycap_is_ignored(self):
         self.assertIsNone(space_prompt(self.image(y=520)))
 
+    def test_black_bars_do_not_put_permanent_hud_inside_prompt_area(self):
+        world=self.image(y=505)
+        frame=cv2.copyMakeBorder(world,83,83,0,0,cv2.BORDER_CONSTANT,value=0)
+        self.assertLess((505+83)/frame.shape[0],.78)
+        self.assertIsNone(space_prompt(frame))
+        world=self.image(y=350)
+        frame=cv2.copyMakeBorder(world,83,83,0,0,cv2.BORDER_CONSTANT,value=0)
+        self.assertIsNotNone(space_prompt(frame))
+
     def test_excluded_region_and_plain_grey_rectangle_are_ignored(self):
         self.assertIsNone(space_prompt(self.image(),excluded=[(.45,.55,.55,.65)]))
         frame=self.image()
@@ -95,13 +104,13 @@ class SpacePromptActionTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(await agent._space_prompt_tick())
         self.assertEqual(agent.scheduler.submit_emergency.await_count,2)
 
-    async def test_movement_resumes_after_delay_even_with_prompt_still_visible(self):
+    async def test_movement_resumes_immediately_even_with_prompt_still_visible(self):
         agent=self.agent();agent._running=True;agent._hunt_active=True
         agent._move_only=True
         agent._screen_guide_enabled=True
         guide={'arrow_tip':(.6,.4),'arrow_direction':(0.,-1.),'direction':(0.,-1.)}
         agent._screen_move_guide=guide
-        agent._update_screen_move_guide=Mock(return_value=guide)
+        agent._update_screen_move_guide=AsyncMock(return_value=guide)
         agent._movement_hunt_enabled=lambda:False
         agent.scheduler.submit=AsyncMock()
         async def sent(c):
@@ -109,7 +118,7 @@ class SpacePromptActionTests(unittest.IsolatedAsyncioTestCase):
         agent.scheduler.submit_emergency=AsyncMock(side_effect=sent)
         now=[10]
         async def tick(_):
-            if now[0]==10:now[0]=12.1
+            if now[0]==10:now[0]=10.01
             else:agent._running=False
         with patch('app.ai.main_agent.space_prompt',return_value=(.4,.4,.5,.5)), \
              patch('app.ai.main_agent.time.monotonic',side_effect=lambda:now[0]), \
@@ -168,7 +177,7 @@ class SpacePromptActionTests(unittest.IsolatedAsyncioTestCase):
             agent._stationary_hunt_mode=True
             self.assertFalse(agent.can_execute(c))
 
-    async def test_delay_begins_after_successful_space_transmission(self):
+    async def test_successful_space_immediately_allows_research_without_repeating_prompt(self):
         agent=self.agent()
         with patch('app.ai.main_agent.space_prompt',return_value=(.4,.4,.5,.5)), \
              patch('app.ai.main_agent.time.monotonic',return_value=10):
@@ -179,13 +188,10 @@ class SpacePromptActionTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(VisualAgent,'_record_input'), \
              patch('app.ai.main_agent.time.monotonic',return_value=10.4):
             agent._record_input(c,'sent')
-        self.assertAlmostEqual(agent._space_prompt_wait_until,12.4)
-        with patch('app.ai.main_agent.time.monotonic',return_value=12.39):
-            self.assertTrue(await agent._space_prompt_tick())
-            self.assertFalse(agent.can_execute(command('MOVE',epoch=3)))
-            self.assertFalse(agent.can_execute(command('MOVE',source='SCREEN_ARROW_MOVE',epoch=3)))
-        with patch('app.ai.main_agent.time.monotonic',return_value=12.4), \
-             patch('app.ai.main_agent.space_prompt',return_value=None):
+        self.assertEqual(agent._space_prompt_wait_until,0)
+        self.assertIsNone(agent._screen_move_guide)
+        with patch('app.ai.main_agent.time.monotonic',return_value=10.41), \
+             patch('app.ai.main_agent.space_prompt',return_value=(.4,.4,.5,.5)):
             self.assertFalse(await agent._space_prompt_tick())
         agent.scheduler.submit_emergency.assert_awaited_once()
 
@@ -210,3 +216,42 @@ class SpacePromptActionTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(VisualAgent,'_record_input'):
             agent._record_input(c,'blocked')
         self.assertEqual(getattr(agent,'_space_prompt_wait_until',0),0)
+
+    async def test_space_resumes_with_new_arrow_after_direction_changes(self):
+        agent=self.agent()
+        agent._planned_move_heading=(1.,0.)
+        agent._planned_recovery_since=9
+        agent._planned_turn_candidate=((0.,1.),1)
+        agent._screen_move_guide={'marker':(.7,.5)}
+        agent._screen_guide_seen_at=10
+        agent._screen_guide_scanned_at=10
+        agent._arrow_hold_distance=75
+        c=command('INTERACT',source='SCREEN_SPACE_PROMPT',epoch=3)
+        with patch.object(VisualAgent,'_record_input'), \
+             patch('app.ai.main_agent.time.monotonic',return_value=10):
+            agent._record_input(c,'sent')
+        diagnostic={}
+        def detect(frame,player,**kwargs):
+            diagnostic.update(kwargs)
+            return {'marker':(.3,.5),'arrow_tip':(.3,.5)}
+        with patch('app.ai.main_agent.time.monotonic',return_value=10.01), \
+             patch('app.ai.main_agent.screen_route_guide',side_effect=detect):
+            guide=await agent._update_screen_move_guide()
+            self.assertIsNotNone(guide)
+            move=agent._arrow_move_command(guide)
+        self.assertIsNone(diagnostic['previous_marker'])
+        self.assertIsNone(diagnostic['preferred_heading'])
+        self.assertFalse(guide.get('planned_recovery',False))
+        self.assertLess(move.direction[0],0)
+        self.assertEqual(agent._space_prompt_wait_until,0)
+
+    def test_failed_space_preserves_arrow_tracking(self):
+        agent=self.agent()
+        agent._planned_move_heading=(1.,0.)
+        guide={'marker':(.7,.5)}
+        agent._screen_move_guide=guide
+        c=command('INTERACT',source='SCREEN_SPACE_PROMPT',epoch=3)
+        with patch.object(VisualAgent,'_record_input'):
+            agent._record_input(c,'blocked')
+        self.assertEqual(agent._planned_move_heading,(1.,0.))
+        self.assertIs(agent._screen_move_guide,guide)

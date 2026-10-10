@@ -1,4 +1,5 @@
 import unittest
+import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -6,10 +7,87 @@ from app.ai.main_agent import MainAgent
 from app.ai.visual_agent import VisualAgent
 from app.core.fast_policy import command
 from app.controller.input_bindings import binding_for_command
+from app.vision.qwen_vl_client import QwenVLClient
 import numpy as np
 
 
 class ControlShortcutsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_release_pause_preserves_modes_and_toggles_from_button_and_wheel(self):
+        agent=MainAgent.__new__(MainAgent)
+        agent._hunt_active=True;agent._move_only=True;agent._manual_skill_mode=True
+        agent._foreground=lambda:True
+        controller=SimpleNamespace(release_inputs=AsyncMock(),stop=AsyncMock())
+        agent.scheduler=SimpleNamespace(clear=AsyncMock(),_cancel_execution=AsyncMock(),
+            executor=SimpleNamespace(_input=controller,release_held_attack=AsyncMock(),release_held_move=AsyncMock()))
+        agent.emit_web_event=Mock()
+        self.assertTrue(await agent.handle_control('/release-pause'))
+        self.assertTrue(agent._release_paused)
+        controller.release_inputs.assert_awaited_once()
+        for action in ('MOVE','ATTACK','USE_SKILL','CAST_BUFF','USE_POTION','INTERACT'):
+            self.assertFalse(agent.can_execute(command(action)))
+        await agent._handle_control_shortcut(6)
+        self.assertFalse(agent._release_paused)
+        self.assertTrue(agent._hunt_active)
+        self.assertTrue(agent._move_only)
+        self.assertTrue(agent._manual_skill_mode)
+        controller.release_inputs.assert_awaited_once()
+
+    def test_qwen_cancel_wakes_reader_without_closing_response_or_holding_lock(self):
+        client=QwenVLClient.__new__(QwenVLClient)
+        client._cancel_lock=threading.Lock();client._cancel_epoch=0
+        client._requests_paused=False
+        def shutdown(_):
+            self.assertTrue(client._cancel_lock.acquire(blocking=False))
+            client._cancel_lock.release()
+        connection=Mock();connection._cancel_socket=Mock(shutdown=Mock(side_effect=shutdown))
+        client._active_connections={connection}
+        client.cancel_pending()
+        self.assertTrue(client._requests_paused)
+        self.assertEqual(client._cancel_epoch,1)
+        connection._cancel_socket.shutdown.assert_called_once()
+        connection.close.assert_not_called()
+
+    async def test_hotkey_listener_survives_stop_transport_error(self):
+        agent=self.agent();agent._running=True
+        attempts=[]
+        async def handle(number):
+            attempts.append(number)
+            if len(attempts)==1:raise ConnectionError('serial failure')
+            agent._running=False
+        agent._handle_control_shortcut=AsyncMock(side_effect=handle)
+        def watch(stop,foreground,pressed):
+            pressed(2);pressed(2);stop.wait(1)
+        with patch('app.ai.visual_agent.watch_control_hotkeys',side_effect=watch), self.assertLogs('app.ai.visual_agent',level='ERROR'):
+            await agent._control_shortcuts_loop()
+        self.assertEqual(attempts,[2,2])
+    async def test_tab_restores_movement_and_repeat_skill_combination(self):
+        agent=self.agent();agent._paused=False;agent._processing_halted=False
+        agent._hunt_active=True;agent._move_only=True;agent._manual_skill_mode=True
+        agent._screen_guide_enabled=True;agent._planned_move_heading=(1.,0.)
+        async def control(message):
+            paused=message=='/stop'
+            agent._paused=paused;agent._processing_halted=paused
+            agent._hunt_active=not paused;agent._move_only=False
+            agent._manual_skill_mode=False;agent._screen_guide_enabled=False
+            agent._planned_move_heading=None
+            return True
+        agent.handle_control=AsyncMock(side_effect=control)
+        await agent._handle_control_shortcut(0)
+        self.assertTrue(agent._paused)
+        self.assertFalse(agent._manual_skill_mode)
+        await agent._handle_control_shortcut(0)
+        self.assertFalse(agent._paused)
+        self.assertTrue(agent._move_only)
+        self.assertTrue(agent._manual_skill_mode)
+        self.assertTrue(agent._screen_guide_enabled)
+        self.assertEqual(agent._planned_move_heading,(1.,0.))
+        self.assertEqual([call.args[0] for call in agent.handle_control.await_args_list],['/stop','이동'])
+
+    async def test_tab_ignored_outside_game(self):
+        agent=self.agent();agent._foreground=lambda:False
+        await agent._handle_control_shortcut(0)
+        agent.handle_control.assert_not_awaited()
+
     async def test_initial_game_focus_does_not_start_hunting(self):
         agent = self.agent()
         agent._focus_was_active = False
@@ -49,6 +127,12 @@ class ControlShortcutsTests(unittest.IsolatedAsyncioTestCase):
         agent._foreground = lambda: False
         await agent._handle_control_shortcut(1)
         agent.handle_control.assert_not_awaited()
+
+    async def test_queued_stop_still_runs_after_game_loses_focus(self):
+        agent=self.agent()
+        agent._foreground=lambda:False
+        await agent._handle_control_shortcut(2)
+        agent.handle_control.assert_awaited_once_with('/stop')
 
     async def test_stationary_hunt_can_be_stopped_with_stop_shortcut(self):
         agent = self.agent()
@@ -101,7 +185,7 @@ class ControlShortcutsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(attack.action_type, 'ATTACK')
         self.assertEqual(attack.track_id, 9)
         self.assertEqual(attack.target, (.7, .6))
-        self.assertFalse(attack.maintain_attack)
+        self.assertTrue(attack.maintain_attack)
         self.assertEqual(binding_for_command(agent._docs['input.json'], attack), 'mouse_right')
 
     async def test_shortcut_notifications_are_queued_during_ai_work(self):
@@ -143,6 +227,59 @@ class ControlShortcutsTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(agent.can_execute(SimpleNamespace(action_type='USE_SKILL')))
         agent.scheduler.submit_emergency.assert_awaited_once()
 
+    async def test_stationary_and_repeat_modes_combine_in_either_order(self):
+        for order in (('반복스킬','제자리사냥'),('제자리사냥','반복스킬')):
+            agent=self.agent();agent._epoch=1;agent._move_only=False
+            agent.scheduler=SimpleNamespace(submit_emergency=AsyncMock())
+            agent.emit_web_event=Mock()
+            original=MainAgent.handle_control.__get__(agent)
+            async def control(message):
+                if message=='/hunt':
+                    agent._paused=False;agent._processing_halted=False
+                    agent._hunt_active=True;agent._stationary_skill_mode=False
+                    return True
+                return await original(message)
+            agent.handle_control=control
+            for message in order:self.assertTrue(await control(message))
+            self.assertTrue(agent._stationary_hunt_mode)
+            self.assertTrue(agent._manual_skill_mode)
+            self.assertFalse(agent._stationary_skill_mode)
+
+    async def test_stationary_loop_dispatches_registered_repeat_skill(self):
+        agent=self.agent();agent._running=True;agent._epoch=1
+        agent._paused=False;agent._processing_halted=False
+        agent._stationary_hunt_mode=True;agent._manual_skill_mode=True
+        agent._fresh=lambda:True
+        agent._stationary_manual_move_tick=AsyncMock(return_value=False)
+        agent.scheduler=SimpleNamespace(submit=AsyncMock(),_is_cooldown_ready=lambda c:True)
+        agent._docs={'input.json':{'attack_skills':[{'id':'one','enabled':True,'cooldown_ms':500}]}}
+        async def tick(_):agent._running=False
+        with patch('app.ai.main_agent.asyncio.sleep',new=tick):
+            await agent._movement_test_loop()
+        skill=agent.scheduler.submit.await_args.args[0]
+        self.assertEqual(skill.source,'MANUAL_SKILL')
+        self.assertEqual(skill.skill_id,'one')
+
+    async def test_normal_action_loop_stops_targets_and_skills_while_left_is_held(self):
+        agent=self.agent();agent._running=True;agent._epoch=1
+        agent._paused=False;agent._processing_halted=False
+        agent._stationary_hunt_mode=True;agent._manual_skill_mode=True
+        agent._fresh=lambda:True;agent._foreground=lambda:True
+        agent._focus_work_allowed=lambda:True
+        agent.scheduler=SimpleNamespace(clear=AsyncMock(),_cancel_execution=AsyncMock(),
+                                        executor=SimpleNamespace(release_held_attack=AsyncMock()))
+        agent._movement_hunt_target=9
+        agent._movement_hunt_command=Mock(side_effect=AssertionError('No targeting while held'))
+        agent._hunt_attack_rotation=Mock(side_effect=AssertionError('No skills while held'))
+        async def tick(_):agent._running=False
+        with patch('app.ai.main_agent.mouse_left_down',return_value=True), \
+             patch('app.ai.visual_agent.asyncio.sleep',new=tick):
+            await VisualAgent._action_loop(agent)
+        self.assertIsNone(agent._movement_hunt_target)
+        agent.scheduler.executor.release_held_attack.assert_awaited_once()
+        agent._movement_hunt_command.assert_not_called()
+        agent._hunt_attack_rotation.assert_not_called()
+
     async def test_stationary_hunt_loop_never_plans_movement(self):
         agent = self.agent()
         agent._running = True
@@ -150,17 +287,43 @@ class ControlShortcutsTests(unittest.IsolatedAsyncioTestCase):
         agent._processing_halted = False
         agent._fresh = lambda: True
         agent._stationary_hunt_mode = True
-        attack = object()
+        agent._epoch=1
+        attack = SimpleNamespace(action_type='ATTACK',target=(.7,.4),track_id=9)
         agent._movement_hunt_command = Mock(return_value=attack)
-        agent.scheduler = SimpleNamespace(submit=AsyncMock())
+        agent.scheduler = SimpleNamespace(submit=AsyncMock(),executor=SimpleNamespace(execute=AsyncMock()))
+        events=[]
+        agent.scheduler.executor.execute.side_effect=lambda _:events.append('hold')
+        agent._movement_hunt_command.side_effect=lambda:events.append('detect') or attack
         agent._prepare_navigation = Mock(side_effect=AssertionError('Must not move'))
 
         async def tick(_):agent._running = False
 
         with patch('app.ai.main_agent.asyncio.sleep', new=tick):
             await agent._movement_test_loop()
-        agent.scheduler.submit.assert_awaited_once_with(attack)
+        self.assertEqual(events,['hold','detect'])
+        updated=agent.scheduler.submit.await_args.args[0]
+        self.assertEqual(updated.target,attack.target)
+        self.assertEqual(updated.reason,'STATIONARY_MODE_HOLD')
+        self.assertTrue(updated.maintain_attack)
+        self.assertIsNone(updated.expires_at)
         agent._prepare_navigation.assert_not_called()
+
+    async def test_manual_left_move_releases_right_once_and_resumes_on_release(self):
+        agent=self.agent()
+        agent.scheduler=SimpleNamespace(clear=AsyncMock(),_cancel_execution=AsyncMock(),executor=SimpleNamespace(release_held_attack=AsyncMock()))
+        with patch('app.ai.main_agent.mouse_left_down',return_value=True), \
+             patch('app.ai.main_agent.time.monotonic',return_value=10):
+            self.assertTrue(await agent._stationary_manual_move_tick())
+            self.assertTrue(await agent._stationary_manual_move_tick())
+        agent.scheduler.clear.assert_awaited_once()
+        agent.scheduler.executor.release_held_attack.assert_awaited_once()
+        with patch('app.ai.main_agent.mouse_left_down',return_value=False), \
+             patch('app.ai.main_agent.time.monotonic',return_value=10.1):
+            self.assertFalse(await agent._stationary_manual_move_tick())
+            self.assertEqual(agent._stationary_manual_move_until,0)
+        with patch('app.ai.main_agent.mouse_left_down',return_value=False), \
+             patch('app.ai.main_agent.time.monotonic',return_value=10.21):
+            self.assertFalse(await agent._stationary_manual_move_tick())
 
     async def test_stationary_hunt_does_not_use_skills_without_a_target(self):
         agent = self.agent()
@@ -169,13 +332,19 @@ class ControlShortcutsTests(unittest.IsolatedAsyncioTestCase):
         agent._processing_halted = False
         agent._fresh = lambda: True
         agent._stationary_hunt_mode = True
+        agent._epoch=1
         agent._movement_hunt_command = Mock(return_value=None)
         agent._hunt_attack_rotation = Mock(side_effect=AssertionError('No skills'))
-        agent.scheduler = SimpleNamespace(submit=AsyncMock())
+        agent.scheduler = SimpleNamespace(submit=AsyncMock(),executor=SimpleNamespace(execute=AsyncMock(),release_held_attack=AsyncMock()))
         async def tick(_):agent._running = False
         with patch('app.ai.main_agent.asyncio.sleep', new=tick):
             await agent._movement_test_loop()
         agent.scheduler.submit.assert_not_awaited()
+        agent.scheduler.executor.execute.assert_awaited_once()
+        held=agent.scheduler.executor.execute.await_args.args[0]
+        self.assertIsNone(held.target)
+        self.assertTrue(held.maintain_attack)
+        agent.scheduler.executor.release_held_attack.assert_not_awaited()
 
     async def test_stop_pauses_all_processing_and_start_resumes(self):
         agent = self.agent()
@@ -208,7 +377,9 @@ class ControlShortcutsTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(agent._hunt_active)
         self.assertTrue(agent.vl.cancelled)
         self.assertEqual(agent.scheduler.submit_emergency.await_args.args[0].action_type, 'STOP')
-        agent.scheduler.executor.release_held_attack.assert_awaited_once()
+        # STOP owns the complete release; an earlier serial RELEASE must not
+        # delay or prevent the emergency from reaching the scheduler.
+        agent.scheduler.executor.release_held_attack.assert_not_awaited()
         self.assertTrue(await agent.handle_control('사냥 시작'))
         self.assertFalse(agent._processing_halted)
         self.assertFalse(agent._paused)

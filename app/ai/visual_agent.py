@@ -1435,18 +1435,53 @@ class VisualAgent:
         thread.start()
         try:
             while self._running:
-                await self._handle_control_shortcut(await queue.get())
+                number=await queue.get()
+                try:
+                    await self._handle_control_shortcut(number)
+                except Exception:
+                    log.exception('[HOTKEY] control failed; listener remains active')
         finally:
             stop.set()
             await asyncio.to_thread(thread.join, .5)
 
     async def _handle_control_shortcut(self, number):
-        if not self._foreground():return
+        if number == 6:
+            if self._foreground():await self.handle_control('/release-pause')
+            return
+        if number == 0:
+            if self._foreground():
+                log.info('[HOTKEY] Tab -> pause/resume requested')
+                await self._toggle_tab_pause()
+            return
+        if number != 2 and not self._foreground():return
         message = {1: '/hunt', 2: '/stop', 3: '이동',
                    4: '반복스킬', 5: '제자리사냥'}.get(number)
         if message is not None:
-            log.info('[HOTKEY] Ctrl+Shift+%s -> %s', number, message)
+            log.info('[HOTKEY] Ctrl+%s -> %s', number, message)
             await self.handle_control(message)
+
+    async def _toggle_tab_pause(self):
+        self._tab_toggle_inflight=True
+        try:
+            if not self._paused and not self._processing_halted:
+                fields=('_move_only','_hunt_active','_stationary_hunt_mode','_stationary_skill_mode',
+                        '_manual_skill_mode','_repeat_skills_hunting','_movement_hunt_requested',
+                        '_screen_guide_enabled','_follow_orange_route','_hunt_preferred_direction',
+                        '_planned_move_heading','_arrow_hold_distance')
+                state={key:getattr(self,key,None) for key in fields}
+                await self.handle_control('/stop')
+                self._tab_resume_state=state
+                log.info('[HOTKEY] Tab -> all commands paused')
+            else:
+                state=getattr(self,'_tab_resume_state',None)
+                message='이동' if state and state['_move_only'] else '/hunt' if not state or state['_hunt_active'] else '/resume'
+                if await self.handle_control(message):
+                    if state:
+                        for key,value in state.items():setattr(self,key,value)
+                    self._tab_resume_state=None
+                    log.info('[HOTKEY] Tab -> previous control modes resumed')
+        finally:
+            self._tab_toggle_inflight=False
 
     async def _emergency_loop(self):
         while self._running:
@@ -1458,11 +1493,24 @@ class VisualAgent:
 
     async def _action_loop(self):
         while self._running:
+            if getattr(self,'_release_paused',False):
+                await asyncio.sleep(.02)
+                continue
             if getattr(self,'_manual_control',False):
                 await asyncio.sleep(.05);continue
             if not self._focus_work_allowed():
                 await asyncio.sleep(.1);continue
             now = time.monotonic()
+            if (not getattr(self,'_stationary_hunt_mode',False)
+                    and getattr(self,'_hunt_active',False)
+                    and await self._stationary_manual_move_tick()):
+                await asyncio.sleep(.01)
+                continue
+            if getattr(self,'_stationary_hunt_mode',False):
+                if not self._paused and not self._processing_halted and self._fresh() and self._foreground():
+                    await self._stationary_hunt_tick()
+                await asyncio.sleep(.01)
+                continue
             if getattr(self,'_manual_skill_mode',False) or getattr(self,'_repeat_skills_hunting',False):
                 if getattr(self,'_stationary_skill_mode',False):
                     if (not self._paused and not self._processing_halted and self._latest_frame is not None
@@ -1700,12 +1748,16 @@ class VisualAgent:
             self._minimap_unusable = False
             self._directive = None
             self._hunt_active = False
-            await self.scheduler.executor.release_held_attack()
-            await self.scheduler.submit_emergency(
-                command("STOP", source="USER_STOP", epoch=self._epoch)
-            )
-            print("[CONTROL] stopped; pending model commands invalidated")
             self.emit_web_event("control", action="stop")
+            print('[CONTROL] pause applied; sending STOP to input controller')
+            try:
+                await self.scheduler.submit_emergency(
+                    command("STOP", source="USER_STOP", epoch=self._epoch)
+                )
+            except Exception as exc:
+                print(f'[STOP INPUT] failed: {exc}')
+                raise
+            print("[CONTROL] stopped; pending model commands invalidated")
             if value == "/quit":
                 self._running = False
             return True

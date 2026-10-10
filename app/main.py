@@ -5,7 +5,7 @@ import configparser
 import argparse
 
 from app.ai.main_agent import MainAgent as VisualAgent
-from app.capture.screen_capture import ScreenCapture
+from app.core.screen_capture import ScreenCapture
 from app.controller.input_controller_factory import create_input_controller
 from app.core.action_executor import ActionExecutor
 from app.core.action_scheduler import ActionScheduler

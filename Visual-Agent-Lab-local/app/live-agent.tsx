@@ -16,6 +16,7 @@ import GameScreenPreview from './game-screen-preview';
 
 type AgentEvent = {seq:number;type:string;request_id?:string;reply?:string;message?:string;saved?:string[];directive?:{action:string}};
 type AgentState = {
+  release_paused?:boolean;
   control_mode?:"manual"|"auto_hunt"|"paused"|"move_only"|"stationary_hunt";learning?:LearningState;recognition_mode?:string;scene?:{type:string;age_seconds:number|null;min_interval:number;stable_interval:number;analysis_status?:string};
   api_version:number;instance:string;profile:string;running:boolean;paused:boolean;foreground:boolean;hud_ready:boolean;capture_fresh:boolean;input_backend:string;restart_required:boolean;
   navigation?:{stuck:boolean;fresh:boolean;minimap_enabled:boolean;player:number[]|null;movement_block_reason?:string|null;mapping?:MinimapMappingState};hud_rechecking?:boolean;hud_recheck_status?:string;input?:InputTelemetry;processing_halted?:boolean;halt_reason?:string|null;hunt_active?:boolean;object_counts?:{total:number;raw:number;monsters:number;items:number;unknown:number};
@@ -140,7 +141,7 @@ export default function LiveAgent({view,config,onLoadConfig,onMeasurement,onGame
   },[address,session]);
   async function control(action:string){
     if(!session)return;
-    try {const result=await request<{state:AgentState}>(session,"/v1/control","POST",{action});setState(result.state);toast.success(action==="stop"?"입력을 중단했습니다.":"자동 반응을 재개했습니다. 게임 창이 전경일 때만 입력합니다.");}
+    try {const result=await request<{state:AgentState}>(session,"/v1/control","POST",{action});setState(result.state);if(action==="release_pause"){toast.success(result.state.release_paused?"일시중지했습니다.":"일시중지를 해제했습니다.");return;}toast.success(action==="stop"?"입력을 중단했습니다.":"자동 반응을 재개했습니다. 게임 창이 전경일 때만 입력합니다.");}
     catch(e){toast.error(e instanceof Error?e.message:"제어 실패");}
   }
   async function apply(){
@@ -151,7 +152,15 @@ export default function LiveAgent({view,config,onLoadConfig,onMeasurement,onGame
     finally{setBusy(false);}
   }
   async function send(commandText=message){
-    if(!session||!online||!commandText.trim())return;
+    if(commandText==="/release-pause"){setMessage("");await control("release_pause");return;}
+    if(!session||!commandText.trim())return;
+    const compact=commandText.toLowerCase().replace(/\s+/g,"").replace(/[.!?]+$/,"");
+    if(["/stop","/pause","stop","사냥중단","사냥중단해","사냥중단해줘","사냥중지","사냥중지해","정지","중지","멈춰"].includes(compact)){
+      setMessage("");
+      await control("stop");
+      return;
+    }
+    if(!online)return;
     const text=commandText.trim(),id=typeof crypto.randomUUID==="function"?crypto.randomUUID():Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,"0")).join("");
     setChats(a=>[...a,{id,text,state:"pending" as const}].slice(-30));setMessage("");
     try{await request(session,"/v1/chat","POST",{message:text,id});}
@@ -162,7 +171,8 @@ export default function LiveAgent({view,config,onLoadConfig,onMeasurement,onGame
   async function gameSelected(id:string){if(!session)return;setChats([]);setMessage("");const next=await request<AgentState>(session,"/v1/state");setState(next);onLoadConfig(next.settings);onGameChange(id);}
   useEffect(()=>{function escape(e:KeyboardEvent){if(e.key==="Escape"&&!e.repeat&&session){e.preventDefault();void request(session,"/v1/control","POST",{action:"stop"}).catch(()=>{});}}window.addEventListener("keydown",escape);return()=>window.removeEventListener("keydown",escape);},[session]);
   return <>{controlSlot&&createPortal(<div className="game-top-controls">        <GameTabs active={state?.profile??""} online={online} call={(path,method,body)=>session?request(session,path,method,body,AbortSignal.timeout(30000)):Promise.reject(new Error("Agent 자동 연결을 기다리고 있습니다."))} onSelected={gameSelected}/>
-        <div className="game-run-controls"><button className="button primary" disabled={!online||busy} onClick={()=>void control("start")}><Play size={15}/>시작 / 재개</button><button className="button stop-button" disabled={!online} onClick={()=>void control("stop")}><Square size={15}/>즉시 중단</button></div>
+        <div className="game-run-controls"><button className="button primary" disabled={!online||busy} onClick={()=>void control("start")}><Play size={15}/>시작 / 재개</button><button className="button stop-button" disabled={!session} onClick={()=>void control("stop")}><Square size={15}/>즉시 중단</button></div>
+        {(state?.release_paused||state?.attack&&(!state.attack.reason.includes("HP")||state.hud.missing_visible))&&<p className={`attack-diagnosis top-attack-status${state?.release_paused?" release-paused":""}`} role="status">공격 상태: {state?.release_paused?"RELEASE 전송 상태 · 일시중지 · 모든 자동 입력 정지":state?.attack?.reason}</p>}
 </div>,controlSlot)}<section hidden={view!=="game"} className="panel live-panel" id="game" aria-label="실제 Agent 연결">
     <div className="panel-heading"><h2><Radio size={18}/>게임</h2><span className={`live-badge ${online?"connected":""}`}>{online?state?.control_mode==="manual"?"연결 · 사용자 직접 조작":state?.paused?"연결 · 일시정지":"연결 · 실행 중":connecting?"자동 연결 중":"자동 재연결 대기"}</span></div>
     <div className="live-body">
@@ -171,10 +181,9 @@ export default function LiveAgent({view,config,onLoadConfig,onMeasurement,onGame
         <LearningPanel learning={state?.learning} onAnswer={setMessage} online={online}/>
         <div className="live-status"><span>게임 창 {state?.foreground?"전경":"비활성 · 입력 차단"}</span>{(state?.hud_rechecking||state?.hud_ready||state?.hud.missing_visible)&&<span>HUD {state?.hud_rechecking?"시작 보정 중":state?.hud_ready?"측정 준비":"미측정"}</span>}<span>실행 액션 {state?.action??"없음"}</span><span>사냥 {state?.control_mode==="manual"?"사용자 직접 조작":state?.hunt_active?"자동사냥":"대기"}</span>{state?.restart_required&&<strong>모델·장치·창 변경은 Agent 재시작 필요</strong>}</div>
         <div className="live-metrics">{[{label:"HP",v:online&&state?.hud.health!=null?value(state.hud.health,"%"):online&&state?.hud.missing_visible?"미측정":"—"},{label:"SP / MP",v:`${online&&state?.hud.sp!=null?value(state.hud.sp,"%"):"—"} / ${online&&state?.hud.mp!=null?value(state.hud.mp,"%"):"—"}`},{label:"GPU 전체 부하",v:value(online?state?.metrics.gpu:null,"%")},{label:"캡처",v:value(online?state?.metrics.fps:null," FPS")},{label:"HUD + OpenCV 처리",v:value(online?state?.metrics.latency:null," ms")},{label:"최근 Qwen 응답",v:value(online?state?.metrics.vl:null," ms")}].map(m=><div key={m.label}><span>{m.label}</span><strong>{m.v}</strong></div>)}</div>
-        {state?.attack&&(!state.attack.reason.includes("HP")||state.hud.missing_visible)&&<p className="attack-diagnosis" role="status">공격 상태: {state.attack.reason}</p>}
         {state?.recognition_mode==="opencv_qwen"&&(!state.navigation?.movement_block_reason?.includes("HP")||state.hud.missing_visible)&&<p className="live-help" role="status">이동 상태: {state.navigation?.movement_block_reason||"이동 실행 조건 충족 · 적이 있으면 전투 우선"}</p>}
         <div className="profile-json"><strong>OpenCV + Qwen-VL</strong><p>Qwen: {state?.scene?.analysis_status==="stopped"?"사냥 중단 · Qwen 처리 중지":state?.scene?.analysis_status==="foreground_wait"?"게임 창 활성화 대기":state?.scene?.analysis_status==="analyzing"?"장면 분석 중":"대기"}</p><p>장면: {state?.scene?.type??"unknown"} · OpenCV 추적 객체 {online?state?.objects.length??0:0}개</p><p>자동 Qwen 최소 간격 {state?.scene?.min_interval??3}초 · 정적 화면 {state?.scene?.stable_interval??15}초</p><p>공격 가능 {state?.attack?.ready??0} · 역할·관계는 사용자 기억과 최신 화면으로 검증</p>{state?.detector?.error&&<p className="live-error">{state.detector.error}</p>}</div>
-        <h3>Qwen-VL과 대화</h3><div className="chat-history" aria-live="polite">{chats.length===0?<p>“사냥 시작해”, “추적 번호 3 몬스터를 공격해”, “물약 기준을 35%로 바꿔”처럼 요청하세요. 사냥 시작은 이동 중 적을 만나면 공격하고, 이동은 공격 없이 진행합니다. 주황색 선·핀을 우선 따라가며, 없으면 미니맵 통로를 탐색합니다.</p>:chats.slice().reverse().map(c=><div className="chat-turn" key={c.id}><p><b>나</b> {c.text}</p><p className={c.state==="error"?"amber-text":""}><b>Qwen</b> {c.reply??"판단 중… 즉시 중단은 계속 사용할 수 있습니다."}</p></div>)}</div><div className="chat-quick-commands" role="group" aria-label="자주 쓰는 게임 명령">{[{label:"사냥시작",text:"사냥 시작해",icon:Play},{label:"사냥중단",text:"사냥 중단해",icon:Square},{label:"이동",text:"이동",icon:ArrowUp},{label:"반복스킬",text:"반복 스킬",icon:RefreshCw},{label:"제자리사냥",text:"제자리 사냥",icon:Swords},{label:"아이템 줍기",text:"주변 아이템을 주워줘",icon:Hand},{label:"예정 진행 방향 변경",text:"예정 진행 방향 변경",icon:RefreshCw}].map(c=><button key={c.label} type="button" disabled={!online} title={`${c.text} · 바로 전송`} aria-label={`${c.label}: ${c.text} 바로 전송`} onClick={()=>{setMessage(c.text);void send(c.text);}}><c.icon size={20} aria-hidden="true"/><span>{c.label}</span></button>)}</div><form onSubmit={e=>{e.preventDefault();void send();}} className="chat-compose"><input aria-label="게임 대화" placeholder="게임 명령 또는 프로필 수정 요청" value={message} maxLength={6000} disabled={!online} onChange={e=>setMessage(e.target.value)}/><button className="button primary" disabled={!online||!message.trim()} type="submit"><Send size={15}/>전송</button></form>
+        <h3>Qwen-VL과 대화</h3><div className="chat-history" aria-live="polite">{chats.length===0?<p>“사냥 시작해”, “추적 번호 3 몬스터를 공격해”, “물약 기준을 35%로 바꿔”처럼 요청하세요. 사냥 시작은 이동 중 적을 만나면 공격하고, 이동은 공격 없이 진행합니다. 주황색 선·핀을 우선 따라가며, 없으면 미니맵 통로를 탐색합니다.</p>:chats.slice().reverse().map(c=><div className="chat-turn" key={c.id}><p><b>나</b> {c.text}</p><p className={c.state==="error"?"amber-text":""}><b>Qwen</b> {c.reply??"판단 중… 즉시 중단은 계속 사용할 수 있습니다."}</p></div>)}</div><div className="chat-quick-commands" role="group" aria-label="자주 쓰는 게임 명령">{[{label:"사냥시작",text:"사냥 시작해",icon:Play},{label:"사냥중단",text:"사냥 중단해",icon:Square},{label:"이동",text:"이동",icon:ArrowUp},{label:"반복스킬",text:"반복 스킬",icon:RefreshCw},{label:"제자리사냥",text:"제자리 사냥",icon:Swords},{label:state?.release_paused?"일시중지 해제":"일시중지",text:"/release-pause",icon:Hand},{label:"예정 진행 방향 변경",text:"예정 진행 방향 변경",icon:RefreshCw}].map(c=><button key={c.label} type="button" disabled={c.icon===Square?!session:!online} title={`${c.text} · 바로 전송`} aria-label={`${c.label}: ${c.text} 바로 전송`} onClick={()=>{setMessage(c.text);void send(c.text);}}><c.icon size={20} aria-hidden="true"/><span>{c.label}</span></button>)}</div><form onSubmit={e=>{e.preventDefault();void send();}} className="chat-compose"><input aria-label="게임 대화" placeholder="게임 명령 또는 프로필 수정 요청" value={message} maxLength={6000} disabled={!online} onChange={e=>setMessage(e.target.value)}/><button className="button primary" disabled={!online||!message.trim()} type="submit"><Send size={15}/>전송</button></form>
         <InputMonitor input={state?.input} hunting={state?.hunt_active} online={online}/>
 </div>
       <div className="controller-column">

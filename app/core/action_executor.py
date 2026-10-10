@@ -59,7 +59,8 @@ class ActionExecutor:
 
     async def execute(self, command: ActionCommand) -> bool:
         self.requested_command = command
-        if not self._running or command.is_expired() or (self.validator and not self.validator(command)):
+        stopping = command.action_type == 'STOP'
+        if not stopping and (not self._running or command.is_expired() or (self.validator and not self.validator(command))):
             await self.release_held_move()
             await self.release_held_attack()
             owner=getattr(self.validator,'__self__',None)
@@ -69,9 +70,12 @@ class ActionExecutor:
         action = command.action_type
         move_skill=(action=='USE_SKILL' and command.source=='MANUAL_SKILL' and self._held_move_command is not None)
         resume_move=self._held_move_command if move_skill else None
-        if not move_skill and (action!='MOVE' or not command.maintain_move):await self.release_held_move()
+        if stopping:
+            self._held_move_command=None
+            self._held_attack_command=None
+        if not stopping and not move_skill and (action!='MOVE' or not command.maintain_move):await self.release_held_move()
         holding = command.maintain_attack and (action == 'ATTACK' or action == 'USE_SKILL' and command.skill_id)
-        if not holding and action not in {'USE_POTION', 'CAST_BUFF'}:
+        if not stopping and not holding and action not in {'USE_POTION', 'CAST_BUFF'}:
             await self.release_held_attack()
         handlers = {
             "MOVE": "move", "ATTACK": "attack", "USE_SKILL": "use_skill",
@@ -120,13 +124,15 @@ class ActionExecutor:
                 self.last_error = controller_error if isinstance(controller_error, str) and controller_error else "입력 컨트롤러가 전송을 거부했습니다"
                 return False
             self.last_command = command
+            if holding and command.reason=='STATIONARY_HOLD':
+                self._held_attack_command=replace(command,expires_at=time.monotonic()+.5)
             if resume_move is not None and not getattr(self._input,'move_held',False):
-                renewed=replace(resume_move,expires_at=time.monotonic()+.35)
+                renewed=replace(resume_move,expires_at=time.monotonic()+.6)
                 if self._running and (self.validator is None or self.validator(renewed)):
                     if await self._input.move(renewed) is not False:
                         self._held_move_command=renewed
             if command.maintain_move and action=='MOVE':
-                self._held_move_command=replace(command,expires_at=time.monotonic()+.35)
+                self._held_move_command=replace(command,expires_at=time.monotonic()+.6)
             self.last_completed_at = time.monotonic()
             return True
         except BaseException as exc:

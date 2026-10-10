@@ -378,6 +378,29 @@ class MinimapMemory:
             if self.valid and self.position is not None:
                 self.pending.append((time.monotonic(),self.position.copy(),tuple(command.direction)))
 
+    def escape_vector(self, blocked_direction):
+        """Choose a straight, connected exit ray, favouring room over the stalled heading."""
+        with self.lock:
+            if not self.valid or self.grid is None or self.mask is None:return None
+            start=np.asarray(self.player)*np.array(self.mask.shape[::-1])/self.CELL
+            angle=math.radians(self.rotation);c,s=math.cos(angle),math.sin(angle)
+            dx,dy=blocked_direction
+            blocked=np.array([dx*c-dy*s,dx*s+dy*c])
+            blocked/=max(1e-6,float(np.linalg.norm(blocked)))
+            best=None
+            for radians in np.linspace(0,2*math.pi,32,endpoint=False):
+                heading=np.array([math.cos(radians),math.sin(radians)])
+                reach=0
+                for distance in range(1,25):
+                    if not corridor_clear(start,start+heading*distance,self.grid):break
+                    reach=distance
+                if reach<4:continue
+                score=reach*(1-.5*max(0,float(heading@blocked)))
+                if best is None or score>best[0]:best=(score,heading,reach)
+            if best is None:return None
+            _,heading,reach=best
+            return heading*min(24,reach*self.CELL*.75)
+
     def _key(self, position):return tuple(np.floor(position/self.CELL).astype(int))
 
     def update(self, frame, settings, now=None):

@@ -4,17 +4,27 @@ import logging
 import time
 import threading
 from ctypes import wintypes
+from app.core.physical_mouse import physical_mouse
 
 log = logging.getLogger(__name__)
 WM_HOTKEY = 0x0312
-MODIFIERS = 0x0004 | 0x0002 | 0x4000  # Shift, Ctrl, no auto-repeat
+MODIFIERS = 0x0002 | 0x4000  # Ctrl, no auto-repeat
 HOTKEY_INTERVAL_SECONDS = 1.0
 _bot_key_lock = threading.Lock()
 _bot_keys = {}
+_mouse_user32 = None
+
+
+def mouse_left_down():
+    global _mouse_user32
+    if _mouse_user32 is None:
+        _mouse_user32=ctypes.WinDLL('user32',use_last_error=True)
+        physical_mouse.start()
+    return physical_mouse.down(lambda:bool(_mouse_user32.GetAsyncKeyState(0x01)&0x8000))
 
 
 def begin_bot_keys(hid_keys):
-    numbers=[key-29 for key in hid_keys if 30<=key<=34]
+    numbers=[key-29 if 30<=key<=34 else 0 for key in hid_keys if 30<=key<=34 or key==43]
     with _bot_key_lock:
         for number in numbers:
             count,until=_bot_keys.get(number,(0,0))
@@ -49,52 +59,55 @@ def watch_control_hotkeys(stop, foreground, pressed, user32=None):
     previous = set()
     was_foreground = False
     chord_locked = False
-    pending = None
     last_pressed = {}
+    tab_was_down=False
+    middle_was_down=False
     def dispatch(number):
         now=time.monotonic()
-        if now-last_pressed.get(number,float('-inf'))<HOTKEY_INTERVAL_SECONDS:return
+        if number!=6 and now-last_pressed.get(number,float('-inf'))<HOTKEY_INTERVAL_SECONDS:return
         last_pressed[number]=now
+        log.info('[HOTKEY] %s received', 'Tab' if number==0 else f'Ctrl+{number}')
         pressed(number)
     try:
         for number in range(1, 6):
             if user32.RegisterHotKey(None, number, MODIFIERS, 0x30 + number):
                 registered.add(number)
-                log.info('[HOTKEY] Ctrl+Shift+%s registered', number)
+                log.info('[HOTKEY] Ctrl+%s registered', number)
             else:
-                log.warning('[HOTKEY] Ctrl+Shift+%s registration failed (Windows error %s); using key-state fallback',
+                log.warning('[HOTKEY] Ctrl+%s registration failed (Windows error %s); using key-state fallback',
                             number, getattr(ctypes, 'get_last_error', lambda: 0)())
         message = wintypes.MSG()
         while not stop.is_set():
             active = foreground()
             down = lambda key: bool(user32.GetAsyncKeyState(key) & 0x8000)
-            modifiers_down = down(0x11) or down(0x10)
+            modifiers_down = down(0x11)
+            tab_down=down(0x09)
+            if active and tab_down and not tab_was_down and not bot_key_active(0):
+                dispatch(0)
+            tab_was_down=tab_down
+            middle_down=down(0x04)
+            if active and middle_down and not middle_was_down:
+                dispatch(6)
+            middle_was_down=middle_down
             def accept(number):
-                nonlocal chord_locked, pending
-                if bot_key_active(number):
-                    log.debug('[HOTKEY] ignored Agent keyboard echo: %s',number)
-                    return
-                # Delayed WM_HOTKEY messages from a skill are not a fresh stop chord.
-                if number==2 and not (down(0x11) and down(0x10)):return
-                if chord_locked or not foreground():return
+                nonlocal chord_locked
+                # Accept the first shortcut immediately. While Ctrl stays down,
+                # allow other shortcuts but suppress matching active bot skills.
+                if not foreground():return
+                if chord_locked and bot_key_active(number):return
                 if modifiers_down:
                     chord_locked=True
-                    if number!=2:
-                        pending=number
-                        return
                 dispatch(number)
             while user32.PeekMessageW(ctypes.byref(message), None, WM_HOTKEY, WM_HOTKEY, 1):
                 if message.wParam in registered and foreground():
                     accept(int(message.wParam))
             # Dedicated polling also keeps unavailable hotkeys off the busy AI loop.
-            held = ({n for n in range(1, 6) if n not in registered and down(0x30 + n)}
-                    if down(0x11) and down(0x10) else set())
+            held = ({n for n in range(1, 6) if down(0x30 + n)}
+                    if down(0x11) and not down(0x10) and not down(0x12) else set())
             if active and was_foreground:
                 for number in sorted(held - previous):
                     accept(number)
             if not modifiers_down:
-                if pending is not None and foreground():dispatch(pending)
-                pending=None
                 chord_locked=False
             previous, was_foreground = held, active
             stop.wait(.01)

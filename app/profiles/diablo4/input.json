@@ -14,7 +14,7 @@
     "TAKE": "mouse_left",
     "USE_POTION": "Q",
     "DODGE": "SPACE",
-    "INTERACT": "F",
+    "INTERACT": "mouse_left",
     "CAST_BUFF": "4",
     "USE_SKILL": "mouse_left",
     "MOVE": "mouse_left"
@@ -39,7 +39,7 @@
       "name": "공격 버프",
       "key": "2",
       "enabled": true,
-      "cooldown_ms": 1200
+      "cooldown_ms": 3200
     },
     {
       "id": "skill_1791289709260_3",

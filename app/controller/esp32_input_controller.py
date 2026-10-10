@@ -176,6 +176,7 @@ class ESP32InputController:
             None
             if op in {"STOP", "STATUS", "RELEASE", "END_TAP"}
             else lambda: epoch == self._epoch and self.capture.can_input()
+                and not getattr(self,'manual_pause_check',lambda:False)()
         )
         def request():
             bot_keys=begin_bot_keys(args[1:]) if op=='KEY' else []
@@ -190,6 +191,36 @@ class ESP32InputController:
         if op not in {"STOP", "STATUS", "RELEASE", "END_TAP"} and reply.get("ready") is not True:
             raise ConnectionError("ESP32 BLE HID 연결이 끊겼습니다.")
         return reply
+
+    def start_manual_mouse_watch(self,check,on_pause):
+        self.manual_pause_check=check
+        self._manual_watch_stop=threading.Event()
+        def watch():
+            paused=False
+            while not self._manual_watch_stop.wait(.01):
+                down=check()
+                if down and not paused:
+                    # Invalidate queued serial writes before waiting for the
+                    # transport lock. RELEASE must not depend on the AI loop.
+                    self._epoch+=1
+                    self.attack_held=False
+                    self.move_held=False
+                    on_pause()
+                    try:
+                        self.transport.request('RELEASE')
+                        print('[MOUSE ESP32] 사용자 왼버튼 유지 · RELEASE 전송 완료')
+                    except Exception as exc:
+                        print(f'[MOUSE ESP32] RELEASE 전송 실패: {exc}')
+                        continue  # Retry while held.
+                paused=down
+        self._manual_watch_thread=threading.Thread(target=watch,name='esp32-manual-mouse',daemon=True)
+        self._manual_watch_thread.start()
+
+    async def release_inputs(self):
+        self._epoch+=1
+        self.attack_held=False
+        self.move_held=False
+        await self._send('RELEASE')
 
     async def release_attack(self):
         was_held = self.attack_held
@@ -211,7 +242,7 @@ class ESP32InputController:
         try:
             while self.attack_held and epoch == self._epoch:
                 await asyncio.sleep(.2)
-                if not self.capture.can_input():
+                if not self.capture.can_input() or getattr(self,'manual_pause_check',lambda:False)():
                     break
                 await self._send('HOLD', 2, 1000)
         except asyncio.CancelledError:
@@ -283,7 +314,7 @@ class ESP32InputController:
             await asyncio.sleep(min(0.01, max(0, deadline - time.monotonic())))
         return epoch == self._epoch and self.capture.can_input()
 
-    async def _tap(self, key, target=None, *, fast=False):
+    async def _tap(self, key, target=None, *, fast=False, command=None):
         epoch = self._epoch
         if key.startswith('mouse_'):
             await self.release_move()
@@ -292,6 +323,8 @@ class ESP32InputController:
         if target is not None and not await self._point(target, epoch, fast=fast):
             return False
         if epoch != self._epoch or not self.capture.can_input():
+            return False
+        if command is not None and not getattr(self,'hold_validator',lambda _:True)(command):
             return False
         ms = int(self.settings_provider()["tap_ms"])
         try:
@@ -315,7 +348,7 @@ class ESP32InputController:
             n = math.hypot(dx, dy)
             if n:
                 target = (0.5 + dx / n * 0.12, 0.5 + dy / n * 0.12)
-        return await self._tap(binding_for_command(self.settings_provider(), c), target)
+        return await self._tap(binding_for_command(self.settings_provider(), c), target,command=c)
 
     async def move(self, c):
         await self.release_attack()
@@ -336,14 +369,14 @@ class ESP32InputController:
                 return False
             # Queue TTL must not expire solely because BLE cursor positioning
             # took longer. Recheck the current arrow, focus and epoch before HOLD.
-            current=replace(c,expires_at=time.monotonic()+.35)
+            current=replace(c,expires_at=time.monotonic()+.6)
             if (epoch!=self._epoch or not self.capture.can_input()
                     or not getattr(self,'hold_validator',lambda _:True)(current)):
                 owner=getattr(getattr(self,'hold_validator',None),'__self__',None)
                 self.last_error = getattr(owner,'_input_block_reason',None) or '왼버튼 유지: 커서 이동 후 최신 화살표/포커스/중단 상태 검증 실패'
                 await self.release_move()
                 return False
-            await self._send('HOLD',1,350)
+            await self._send('HOLD',1,600)
             self.move_held=True
             self._move_clicked=True
             return True
@@ -377,10 +410,12 @@ class ESP32InputController:
                 raise ConnectionError('우클릭 유지에는 ESP32 BLE 펌웨어 1.1 업로드가 필요합니다: firmware/esp32_ble_hid/esp32_ble_hid.ino')
             self._move_clicked = False
             epoch = self._epoch
-            if not self.capture.can_input() or (c.target is not None and not await self._point(c.target, epoch)):
+            fast=c.reason in {'STATIONARY_HOLD','STATIONARY_POST_DEATH','STATIONARY_TARGET_GRACE','STATIONARY_MODE_HOLD'}
+            if not self.capture.can_input() or (c.target is not None and not await self._point(c.target, epoch,fast=fast)):
                 await self.release_attack()
                 return False
-            if epoch != self._epoch or not self.capture.can_input() or c.is_expired() or not getattr(self, 'hold_validator', lambda _: True)(c):
+            current=replace(c,expires_at=time.monotonic()+.5) if c.reason=='STATIONARY_HOLD' else c
+            if epoch != self._epoch or not self.capture.can_input() or current.is_expired() or not getattr(self, 'hold_validator', lambda _: True)(current):
                 await self.release_attack()
                 return False
             await self._send('HOLD', 2, 1000)
@@ -411,13 +446,23 @@ class ESP32InputController:
 
     async def stop(self, c):
         self._epoch += 1
-        await self.release_move()
-        await self.release_attack()
+        self.move_held=False
+        self.attack_held=False
+        task,self._hold_task=self._hold_task,None
+        if task and task is not asyncio.current_task():
+            task.cancel()
+            await asyncio.gather(task,return_exceptions=True)
+        # Firmware STOP releases every mouse button and keyboard key in one
+        # transaction, even if a previous RELEASE transaction failed.
         await self._send("STOP")
         self._move_clicked = False
         return True
 
     async def close(self):
+        stop=getattr(self,'_manual_watch_stop',None)
+        if stop is not None:
+            stop.set()
+            await asyncio.to_thread(self._manual_watch_thread.join,1)
         self._epoch += 1
         await self.release_move()
         await self.release_attack()

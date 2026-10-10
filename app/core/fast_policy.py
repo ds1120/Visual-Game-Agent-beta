@@ -35,7 +35,7 @@ def command(
         action,
         priority,
         now,
-        now + 0.5,
+        None if action == 'STOP' else now + 0.5,
         cooldown if cooldown_seconds is None else cooldown_seconds,
         False,
         source,

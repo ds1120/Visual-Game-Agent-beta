@@ -19,12 +19,30 @@ from app.core.action_scheduler import ActionScheduler
 
 
 class NavigationHandoffTests(unittest.TestCase):
+    def test_held_arrow_input_accepts_small_marker_motion_but_not_reversal_or_stop(self):
+        agent=self.agent();agent._epoch=1;agent.movement_test_mode=True
+        agent._paused=False;agent._processing_halted=False
+        agent._move_only=True;agent._hunt_active=True;agent._screen_guide_enabled=True
+        agent._fresh=lambda:True;agent._foreground=lambda:True
+        agent._screen_guide_seen_at=time.monotonic()
+        agent._screen_move_guide={'marker':(.6,.4)}
+        with patch('app.ai.main_agent.random.uniform',return_value=75.):
+            move=agent._arrow_move_command(agent._screen_move_guide)
+        w=agent._latest_frame.shape[1]
+        agent._screen_move_guide={'marker':(.6+25/w,.4)}
+        self.assertTrue(agent.can_execute(move))
+        agent._screen_move_guide={'marker':(.4,.6)}
+        self.assertFalse(agent.can_execute(move))
+        agent._screen_move_guide={'marker':(.6,.4)}
+        agent._paused=True
+        self.assertFalse(agent.can_execute(move))
+
     def test_move_button_only_clicks_arrows_and_never_processes_other_navigation(self):
         for arrow in (None,{'arrow_tip':(.6,.4),'arrow_direction':(0.,-1.)}):
             agent=self.agent();agent._epoch=1;agent._running=True
             agent._paused=False;agent._processing_halted=False;agent._move_only=True
             agent._fresh=lambda:True;agent._foreground=lambda:True
-            agent._update_screen_move_guide=Mock(return_value=arrow)
+            agent._update_screen_move_guide=AsyncMock(return_value=arrow)
             agent._space_prompt_tick=AsyncMock(side_effect=AssertionError('No Space in move-only mode'))
             agent._review_missing_navigation_route=Mock(side_effect=AssertionError('No minimap planning'))
             agent._recover_rejected_movement=Mock(side_effect=AssertionError('No recovery'))
@@ -91,6 +109,25 @@ class NavigationHandoffTests(unittest.TestCase):
         agent._paused=True
         self.assertFalse(agent.can_execute(move))
 
+    def test_fixed_arrow_offset_passes_validation_in_all_directions(self):
+        agent=self.agent();agent._epoch=1
+        agent.movement_test_mode=True;agent._paused=False;agent._processing_halted=False
+        agent._move_only=True;agent._hunt_active=True;agent._screen_guide_enabled=True
+        agent._fresh=lambda:True;agent._foreground=lambda:True
+        agent._screen_guide_seen_at=time.monotonic()
+        agent._world_player_origin=lambda:(.5,.5)
+        agent._arrow_hold_distance=80
+        for x,y in ((.3,.5),(.7,.5),(.5,.3),(.5,.7),(.3,.3),(.7,.3),(.3,.7),(.7,.7)):
+            guide={'marker':(x,y)}
+            agent._screen_move_guide=guide
+            move=agent._arrow_move_command(guide)
+            self.assertTrue(agent.can_execute(move),agent._input_block_reason)
+            offset=(np.array(move.target)-[x,y])*[agent._latest_frame.shape[1],agent._latest_frame.shape[0]]
+            self.assertAlmostEqual(np.linalg.norm(offset),100)
+            self.assertFalse(agent.can_execute(replace(move,target=(x,y))))
+            self.assertFalse(agent.can_execute(replace(move,target=(x,y-.05))))
+            self.assertFalse(agent.can_execute(replace(move,target=(x,y+.2))))
+
     def test_planned_display_follows_orange_bends_instead_of_click_projection(self):
         agent=self.agent();agent._screen_guide_enabled=True
         memory=agent.minimap_memory
@@ -145,7 +182,9 @@ class NavigationHandoffTests(unittest.TestCase):
                 move=agent._arrow_move_command(guide)
             delta=(np.array(move.target)-np.array(guide['arrow_tip']))*[width,height]
             expected=np.array([.1*width,-.1*height]);expected/=np.linalg.norm(expected)
-            np.testing.assert_allclose(delta,expected*75,atol=1e-6)
+            theta=np.deg2rad(5)
+            expected=np.array([[np.cos(theta),-np.sin(theta)],[np.sin(theta),np.cos(theta)]])@expected
+            np.testing.assert_allclose(delta,expected*100,atol=1e-6)
             self.assertEqual(move.source,'SCREEN_ARROW_MOVE')
             self.assertEqual(move.duration_ms,0)
             self.assertEqual(move.cooldown,.05)
@@ -158,7 +197,7 @@ class NavigationHandoffTests(unittest.TestCase):
         agent._screen_guide_enabled=True
         guide={'arrow_tip':(.6,.4),'arrow_direction':(0.,-1.),'direction':(0.,-1.)}
         agent._screen_move_guide=guide
-        agent._update_screen_move_guide=Mock(return_value=guide)
+        agent._update_screen_move_guide=AsyncMock(return_value=guide)
         agent._review_missing_navigation_route=Mock();agent._recover_rejected_movement=Mock()
         agent._movement_hunt_enabled=lambda:False
         agent._continue_navigation=Mock(side_effect=AssertionError('Old destination must not intercept arrow click'))
@@ -176,7 +215,7 @@ class NavigationHandoffTests(unittest.TestCase):
             agent._hunt_active=True;agent._fresh=lambda:True;agent._foreground=lambda:True
             agent._screen_guide_enabled=True
             agent.minimap_memory.orange_mask=np.full((20,20),255 if orange else 0,np.uint8)
-            agent._update_screen_move_guide=Mock(return_value=None)
+            agent._update_screen_move_guide=AsyncMock(return_value=None)
             agent._random_move_heading=Mock(return_value=(0.,1.))
             agent._review_missing_navigation_route=Mock();agent._recover_rejected_movement=Mock()
             agent._try_navigation_escape=AsyncMock(return_value=False)

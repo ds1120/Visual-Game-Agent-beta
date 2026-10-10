@@ -221,6 +221,9 @@ class AgentBridge:
     async def control(self, request):
         data = await request.json()
         value = data.get("action")
+        if value == 'release_pause':
+            await self.agent.handle_control('/release-pause')
+            return web.json_response({'ok':True,'state':self.snapshot()})
         if value == "disconnect":
             await self.agent.handle_control("/stop")
             self.token = secrets.token_urlsafe(32)
@@ -255,7 +258,7 @@ class AgentBridge:
             if self.agent._processing_halted:
                 mode_reply = "사냥 중단 · 모든 작업 일시정지. 버튼 또는 단축키로 재개하세요."
             elif getattr(self.agent, '_stationary_hunt_mode', False):
-                mode_reply = "제자리사냥 · 몹을 감지·타겟팅하고 주공격 스킬(오른쪽 클릭)만 사용합니다."
+                mode_reply = "제자리사냥 · 이동 없이 몹을 빠르게 타겟팅하고 기본 공격의 오른쪽 버튼을 유지합니다."
             elif getattr(self.agent, '_screen_guide_enabled', False):
                 mode_reply = "이동 · 빨간 방향 표시와 흰 점을 함께 인식해 예정 진행 방향을 설정합니다. 미니맵 통로를 확인한 뒤 이동합니다."
             self.agent.emit_web_event(

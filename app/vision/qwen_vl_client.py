@@ -304,12 +304,15 @@ class QwenVLClient:
     def cancel_pending(self):
         with self._cancel_lock:
             self._requests_paused=True;self._cancel_epoch+=1
-            for connection in tuple(self._active_connections):
-                try:
-                    sock=getattr(connection,'_cancel_socket',None) or connection.sock
-                    if sock is not None:sock.shutdown(socket.SHUT_RDWR)
-                except OSError:pass
-                connection.close()
+            connections=tuple(self._active_connections)
+        # Never close a buffered HTTP response from the control/event-loop
+        # thread: close can wait for the reader's lock. Wake the reader using
+        # socket shutdown; its own finally block closes the response/connection.
+        for connection in connections:
+            try:
+                sock=getattr(connection,'_cancel_socket',None) or connection.sock
+                if sock is not None:sock.shutdown(socket.SHUT_RDWR)
+            except OSError:pass
 
     def resume_requests(self):
         with self._cancel_lock:self._requests_paused=False

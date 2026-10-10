@@ -4,9 +4,9 @@ import numpy as np
 from app.vision.arrow_template import match_arrow
 
 
-def screen_route_guide(frame, player=(.5,.5), excluded=(), *, with_presence=False,arrow_only=False,previous_marker=None,preferred_heading=None):
+def screen_route_guide(frame, player=(.5,.5), excluded=(), *, with_presence=False,arrow_only=False,previous_marker=None,preferred_heading=None,diagnostics=None,fast_only=False):
     if arrow_only:
-        guide=match_arrow(frame,player,excluded,previous_marker,preferred_heading)
+        guide=match_arrow(frame,player,excluded,previous_marker,preferred_heading,diagnostics,fast_only=fast_only)
         return (guide,guide is not None,False) if with_presence else guide
     h,w=frame.shape[:2]
     width=min(w,960)

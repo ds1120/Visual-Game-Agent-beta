@@ -1,6 +1,7 @@
 """Detect the grey Space keycap with its dark U-shaped spacebar glyph."""
 import cv2
 import numpy as np
+from app.vision.game_viewport import game_viewport
 
 
 def space_prompt(frame,excluded=()):
@@ -12,7 +13,10 @@ def space_prompt(frame,excluded=()):
     grey=cv2.inRange(hsv,(0,0,95),(179,80,255))
     visible=np.zeros((ih,iw),np.uint8)
     # The bottom HUD contains a permanent evade keycap; it is never a prompt.
-    visible[round(.08*ih):round(.78*ih),round(.08*iw):round(.92*iw)]=255
+    left,top,right,bottom=game_viewport(frame)
+    vw,vh=right-left,bottom-top
+    visible[top+round(.08*vh):top+round(.78*vh),
+            left+round(.08*vw):left+round(.92*vw)]=255
     for left,top,right,bottom in excluded:
         cv2.rectangle(visible,(round(left*iw),round(top*ih)),(round(right*iw),round(bottom*ih)),0,-1)
     contours,_=cv2.findContours(cv2.bitwise_and(grey,visible),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)

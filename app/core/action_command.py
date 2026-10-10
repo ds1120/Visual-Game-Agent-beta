@@ -38,6 +38,7 @@ class ActionCommand:
     maintain_attack: bool = False
     move_clicks: int = 1
     maintain_move: bool = False
+    navigation_anchor: tuple[float, float] | None = None
 
     def is_expired(self) -> bool:
         """
